@@ -1,0 +1,38 @@
+name: netgen-pinn
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  
+  # Scientific computing core
+  - numpy=2.3.*
+  - pandas=2.3.*
+  - matplotlib=3.10.*
+  
+  # Jupyter ecosystem
+  - jupyter
+  - jupyterlab=4.4.*
+  - notebook=7.4.*
+  - ipykernel
+  - ipywidgets
+  - nbconvert
+  
+  # Deep learning
+  - pytorch=2.7.*
+  
+  # Visualization
+  - pyvista
+  
+  # Development tools
+  - black
+  
+  # pip-only packages
+  - pip:
+    - netgen-mesher==6.2.2505
+    - ngsolve==6.2.2505
+    - netgen_occt==7.8.1
+    - vtk==9.5.0
+    - pooch==1.8.2
+    - scooby==0.10.1

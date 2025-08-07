@@ -1,0 +1,12 @@
+PINN ADAPTIVE MESH EXPERIMENT SUMMARY
+==================================================
+
+ADAPTIVE MESH METHOD:
+  Mesh progression: 75 → 110 points (×1.47)
+  Error reduction: 3.10e+04 → 2.44e+04 (×1.27)
+
+RANDOM POINTS METHOD:
+  Final error: 2.55e+04
+
+COMPARISON:
+  Adaptive advantage: 4.1% better error rate
