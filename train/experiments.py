@@ -307,14 +307,39 @@ def run_random_training_fair(
         # Train model (uses shared_dataset for data loss, random points for residual loss)
         train_model(model, shared_dataset, epochs, lr=TRAINING_CONFIG["lr"])
 
+        # Compute and export random residuals if requested
+        if export_images:
+            from mesh_refinement import compute_random_residuals
+            from fem_solver import solve_FEM
+            gfu, fes = solve_FEM(initial_mesh)  # Get finite element space
+            compute_random_residuals(
+                model,
+                initial_mesh, 
+                fes,
+                export_images=True,
+                iteration=iteration
+            )
+
         # Error assessment using same reference solution as adaptive method
-        compute_model_error(
-            model,
-            reference_mesh,
-            reference_solution,
-            export_images=False,
-            iteration=iteration,
-        )
+        # Use specialized random error function that creates random_errors_*.png files
+        if export_images:
+            from mesh_refinement import compute_random_model_error
+            compute_random_model_error(
+                model,
+                reference_mesh,
+                reference_solution,
+                export_images=True,
+                iteration=iteration,
+            )
+        else:
+            # Use regular error computation without images
+            compute_model_error(
+                model,
+                reference_mesh,
+                reference_solution,
+                export_images=False,
+                iteration=iteration,
+            )
 
         model.mesh_point_count_history.append(target_point_count)
 
@@ -531,7 +556,8 @@ def run_complete_experiment(
             trained_models["adaptive"],
             trained_models["random"],
             output_dir=DIRECTORY,
-            include_residual_gif=True,  # Always include the residual GIF
+            include_gifs=True,      # Include both residual and error GIFs
+            cleanup_pngs=True,      # Clean up PNG files after GIF creation
         )
 
     print(f"\n{'='*80}")

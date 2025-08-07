@@ -313,7 +313,7 @@ def plot_training_convergence_simple(model, model_name, save_path=None):
     plt.close()  # Always close to prevent interactive display
 
 
-def create_residual_gif(folder_path, output_filename="residual_evolution.gif", duration=None, loop=None):
+def create_residual_gif(folder_path, output_filename="adaptive_residual_evolution.gif", duration=None, loop=None, cleanup_pngs=True):
     """
     Create an animated GIF showing residual field evolution (adaptive method only).
     This visualization shows how adaptive mesh refinement zooms in on high-residual regions.
@@ -323,6 +323,7 @@ def create_residual_gif(folder_path, output_filename="residual_evolution.gif", d
         output_filename: Name of output GIF file
         duration: Duration between frames in milliseconds
         loop: Number of loops (0 = infinite)
+        cleanup_pngs: Whether to delete PNG files after GIF creation
         
     Returns:
         None
@@ -373,11 +374,254 @@ def create_residual_gif(folder_path, output_filename="residual_evolution.gif", d
         )
         print(f"✓ Residual evolution GIF created: {output_path}")
         print(f"  Shows adaptive refinement focusing on {len(images)} iterations")
+        
+        # Clean up PNG files if requested
+        if cleanup_pngs:
+            for file_name in residual_files:
+                png_path = os.path.join(folder_path, file_name)
+                try:
+                    os.remove(png_path)
+                    print(f"  Cleaned up: {file_name}")
+                except Exception as e:
+                    print(f"  Warning: Could not remove {file_name}: {e}")
+            print(f"  Cleaned up {len(residual_files)} residual PNG files")
+        
     except Exception as e:
         print(f"Error creating residual GIF: {e}")
 
 
-def create_essential_visualizations(adaptive_model, random_model, output_dir=None, include_residual_gif=True):
+def create_error_gif(folder_path, output_filename="adaptive_error_evolution.gif", duration=None, loop=None, cleanup_pngs=True):
+    """
+    Create an animated GIF showing error field evolution (adaptive method only).
+    This visualization shows how the error between PINN predictions and reference solution changes.
+    
+    Args:
+        folder_path: Path to folder containing error images
+        output_filename: Name of output GIF file
+        duration: Duration between frames in milliseconds
+        loop: Number of loops (0 = infinite)
+        cleanup_pngs: Whether to delete PNG files after GIF creation
+        
+    Returns:
+        None
+    """
+    if duration is None:
+        duration = VIZ_CONFIG["gif_duration"]
+    if loop is None:
+        loop = VIZ_CONFIG["gif_loop"]
+    
+    images = []
+    
+    # Find all error images
+    try:
+        error_files = []
+        for file_name in os.listdir(folder_path):
+            if file_name.lower().startswith("errors") and file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                error_files.append(file_name)
+        
+        # Sort by iteration number (extract from filename like "errors_1.png")
+        error_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]) if '_' in x and x.split('_')[-1].split('.')[0].isdigit() else 0)
+        
+        for file_name in error_files:
+            image_path = os.path.join(folder_path, file_name)
+            try:
+                img = Image.open(image_path)
+                images.append(img)
+            except Exception as e:
+                print(f"Warning: Could not load error image {image_path}: {e}")
+                
+    except FileNotFoundError:
+        print(f"Warning: Folder {folder_path} not found")
+        return
+
+    if not images:
+        print("No error images found - GIF creation skipped")
+        print("Note: Enable 'export_images=True' in experiment to generate error fields")
+        return
+
+    # Create animated GIF
+    try:
+        output_path = os.path.join(folder_path, output_filename)
+        images[0].save(
+            output_path,
+            save_all=True,
+            append_images=images[1:],
+            duration=duration,
+            loop=loop,
+        )
+        print(f"✓ Error evolution GIF created: {output_path}")
+        print(f"  Shows error field evolution over {len(images)} iterations")
+        
+        # Clean up PNG files if requested
+        if cleanup_pngs:
+            for file_name in error_files:
+                png_path = os.path.join(folder_path, file_name)
+                try:
+                    os.remove(png_path)
+                    print(f"  Cleaned up: {file_name}")
+                except Exception as e:
+                    print(f"  Warning: Could not remove {file_name}: {e}")
+            print(f"  Cleaned up {len(error_files)} error PNG files")
+        
+    except Exception as e:
+        print(f"Error creating error GIF: {e}")
+
+
+def create_random_residual_gif(folder_path, output_filename="random_residual_evolution.gif", duration=None, loop=None, cleanup_pngs=True):
+    """
+    Create an animated GIF showing random residual field evolution.
+    This visualization shows how residuals evolve with random point training.
+    
+    Args:
+        folder_path: Path to folder containing random residual images
+        output_filename: Name of output GIF file
+        duration: Duration between frames in milliseconds
+        loop: Number of loops (0 = infinite)
+        cleanup_pngs: Whether to delete PNG files after GIF creation
+        
+    Returns:
+        None
+    """
+    if duration is None:
+        duration = VIZ_CONFIG["gif_duration"]
+    if loop is None:
+        loop = VIZ_CONFIG["gif_loop"]
+    
+    images = []
+    
+    # Find all random residual images
+    try:
+        residual_files = []
+        for file_name in os.listdir(folder_path):
+            if file_name.lower().startswith("random_residuals") and file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                residual_files.append(file_name)
+        
+        # Sort by iteration number (extract from filename like "random_residuals_1.png")
+        residual_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]) if '_' in x and x.split('_')[-1].split('.')[0].isdigit() else 0)
+        
+        for file_name in residual_files:
+            image_path = os.path.join(folder_path, file_name)
+            try:
+                img = Image.open(image_path)
+                images.append(img)
+            except Exception as e:
+                print(f"Warning: Could not load random residual image {image_path}: {e}")
+                
+    except FileNotFoundError:
+        print(f"Warning: Folder {folder_path} not found")
+        return
+
+    if not images:
+        print("No random residual images found - GIF creation skipped")
+        print("Note: Enable 'export_images=True' in experiment to generate random residual fields")
+        return
+
+    # Create animated GIF
+    try:
+        output_path = os.path.join(folder_path, output_filename)
+        images[0].save(
+            output_path,
+            save_all=True,
+            append_images=images[1:],
+            duration=duration,
+            loop=loop,
+        )
+        print(f"✓ Random residual evolution GIF created: {output_path}")
+        print(f"  Shows random point residual evolution over {len(images)} iterations")
+        
+        # Clean up PNG files if requested
+        if cleanup_pngs:
+            for file_name in residual_files:
+                png_path = os.path.join(folder_path, file_name)
+                try:
+                    os.remove(png_path)
+                    print(f"  Cleaned up: {file_name}")
+                except Exception as e:
+                    print(f"  Warning: Could not remove {file_name}: {e}")
+            print(f"  Cleaned up {len(residual_files)} random residual PNG files")
+        
+    except Exception as e:
+        print(f"Error creating random residual GIF: {e}")
+
+
+def create_random_error_gif(folder_path, output_filename="random_error_evolution.gif", duration=None, loop=None, cleanup_pngs=True):
+    """
+    Create an animated GIF showing random error field evolution.
+    This visualization shows how the error between random PINN predictions and reference solution changes.
+    
+    Args:
+        folder_path: Path to folder containing random error images
+        output_filename: Name of output GIF file
+        duration: Duration between frames in milliseconds
+        loop: Number of loops (0 = infinite)
+        cleanup_pngs: Whether to delete PNG files after GIF creation
+        
+    Returns:
+        None
+    """
+    if duration is None:
+        duration = VIZ_CONFIG["gif_duration"]
+    if loop is None:
+        loop = VIZ_CONFIG["gif_loop"]
+    
+    images = []
+    
+    # Find all random error images
+    try:
+        error_files = []
+        for file_name in os.listdir(folder_path):
+            if file_name.lower().startswith("random_errors") and file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                error_files.append(file_name)
+        
+        # Sort by iteration number (extract from filename like "random_errors_1.png")
+        error_files.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]) if '_' in x and x.split('_')[-1].split('.')[0].isdigit() else 0)
+        
+        for file_name in error_files:
+            image_path = os.path.join(folder_path, file_name)
+            try:
+                img = Image.open(image_path)
+                images.append(img)
+            except Exception as e:
+                print(f"Warning: Could not load random error image {image_path}: {e}")
+                
+    except FileNotFoundError:
+        print(f"Warning: Folder {folder_path} not found")
+        return
+
+    if not images:
+        print("No random error images found - GIF creation skipped")
+        print("Note: Enable 'export_images=True' in experiment to generate random error fields")
+        return
+
+    # Create animated GIF
+    try:
+        output_path = os.path.join(folder_path, output_filename)
+        images[0].save(
+            output_path,
+            save_all=True,
+            append_images=images[1:],
+            duration=duration,
+            loop=loop,
+        )
+        print(f"✓ Random error evolution GIF created: {output_path}")
+        print(f"  Shows random point error field evolution over {len(images)} iterations")
+        
+        # Clean up PNG files if requested
+        if cleanup_pngs:
+            for file_name in error_files:
+                png_path = os.path.join(folder_path, file_name)
+                try:
+                    os.remove(png_path)
+                    print(f"  Cleaned up: {file_name}")
+                except Exception as e:
+                    print(f"  Warning: Could not remove {file_name}: {e}")
+            print(f"  Cleaned up {len(error_files)} random error PNG files")
+        
+    except Exception as e:
+        print(f"Error creating random error GIF: {e}")
+
+
+def create_essential_visualizations(adaptive_model, random_model, output_dir=None, include_gifs=True, cleanup_pngs=True):
     """
     Create the essential set of visualizations for the experiment.
     
@@ -385,6 +629,8 @@ def create_essential_visualizations(adaptive_model, random_model, output_dir=Non
         adaptive_model: Trained adaptive PINN model
         random_model: Trained random PINN model
         output_dir: Directory to save plots (uses config default if None)
+        include_gifs: Whether to create evolution GIFs for residuals and errors
+        cleanup_pngs: Whether to clean up PNG files after GIF creation
     """
     if output_dir is None:
         output_dir = DIRECTORY
@@ -409,14 +655,31 @@ def create_essential_visualizations(adaptive_model, random_model, output_dir=Non
     random_training_path = os.path.join(output_dir, "random_training_convergence.png")
     plot_training_convergence_simple(random_model, "Random Points", random_training_path)
     
-    # 4. Residual evolution GIF (shows adaptive refinement strategy)
-    if include_residual_gif:
-        print("Creating residual evolution GIF...")
-        gif_path = "residual_evolution.gif"
-        create_residual_gif(output_dir, gif_path)
+    # 4. Evolution GIFs (shows adaptive refinement strategy and error evolution)
+    if include_gifs:
+        print("Creating adaptive residual evolution GIF...")
+        gif_path = "adaptive_residual_evolution.gif"
+        create_residual_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        
+        print("Creating adaptive error evolution GIF...")
+        gif_path = "adaptive_error_evolution.gif"
+        create_error_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        
+        print("Creating random residual evolution GIF...")
+        gif_path = "random_residual_evolution.gif"
+        create_random_residual_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        
+        print("Creating random error evolution GIF...")
+        gif_path = "random_error_evolution.gif"
+        create_random_error_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
     
     print(f"Essential visualizations saved to {output_dir}")
-    print("Key files: method_comparison.png, performance_summary.txt, residual_evolution.gif")
+    if include_gifs:
+        print("Key files: method_comparison.png, performance_summary.txt")
+        print("  Adaptive GIFs: adaptive_residual_evolution.gif, adaptive_error_evolution.gif")
+        print("  Random GIFs: random_residual_evolution.gif, random_error_evolution.gif")
+    else:
+        print("Key files: method_comparison.png, performance_summary.txt")
 
 
 def create_detailed_visualizations(adaptive_model, random_model, reference_solution=None, output_dir=None):

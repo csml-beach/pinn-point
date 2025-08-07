@@ -264,3 +264,139 @@ def analyze_refinement_patterns(model):
     }
     
     return analysis
+
+
+def compute_random_residuals(model, initial_mesh, fe_space, export_images=False, iteration=None):
+    """Compute residuals for random point model and export visualization.
+    
+    Args:
+        model: PINN model with random points
+        initial_mesh: Initial mesh (for domain bounds and visualization)
+        fe_space: Finite element space for GridFunction creation
+        export_images: Whether to export residual visualization
+        iteration: Current iteration number for file naming
+        
+    Returns:
+        None (updates model residual history)
+    """
+    # Compute PDE residuals at random points
+    res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().numpy()
+    
+    # For random points, we need to interpolate residuals to the mesh for visualization
+    # Create GridFunction and interpolate residuals from random points to mesh
+    residuals = GridFunction(fe_space)
+    
+    # Get mesh coordinates
+    from fem_solver import export_vertex_coordinates
+    mesh_coords = export_vertex_coordinates(initial_mesh)
+    mesh_x, mesh_y = mesh_coords.T
+    
+    # Simple interpolation: find nearest random point for each mesh point
+    import numpy as np
+    random_coords = torch.stack([model.mesh_x, model.mesh_y], dim=1).cpu().numpy()
+    
+    interpolated_res = []
+    for mx, my in zip(mesh_x, mesh_y):
+        # Find nearest random point
+        distances = np.sum((random_coords - np.array([mx, my]))**2, axis=1)
+        nearest_idx = np.argmin(distances)
+        interpolated_res.append(res[nearest_idx])
+    
+    # Set interpolated residuals in GridFunction
+    from ngsolve import BaseVector
+    residuals.vec[:] = BaseVector(np.array(interpolated_res).flatten())
+    residuals = residuals * residuals  # Square the residuals
+    
+    # Compute total residuals for tracking
+    from ngsolve import Integrate, VOL, BND
+    total_residual = Integrate(residuals, initial_mesh, VOL)
+    boundary_residual = Integrate(residuals, initial_mesh, BND)
+
+    # Store residual history
+    if not hasattr(model, 'boundary_residual_history'):
+        model.boundary_residual_history = []
+    if not hasattr(model, 'total_residual_history'):
+        model.total_residual_history = []
+        
+    model.boundary_residual_history.append(boundary_residual)
+    model.total_residual_history.append(total_residual)
+
+    # Export visualization if requested
+    if export_images and iteration is not None:
+        from visualization import export_to_png
+        export_to_png(
+            initial_mesh,
+            residuals,
+            fieldname="random_residuals",
+            filename=f"random_residuals_{iteration}.png",
+        )
+    
+    print(f"Random residuals computed - Total: {total_residual:.2e}, Boundary: {boundary_residual:.2e}")
+
+
+def compute_random_model_error(model, reference_mesh, reference_solution, export_images=False, iteration=None):
+    """Compute error for random model against reference solution.
+    
+    Args:
+        model: Random PINN model
+        reference_mesh: High-fidelity reference mesh
+        reference_solution: High-fidelity reference solution
+        export_images: Whether to export error visualization
+        iteration: Current iteration number for file naming
+        
+    Returns:
+        None (updates model error history)
+    """
+    # Get reference mesh coordinates
+    from fem_solver import export_vertex_coordinates
+    ref_coords = export_vertex_coordinates(reference_mesh)
+    ref_x, ref_y = ref_coords.T
+
+    # Evaluate PINN on reference mesh
+    from config import DEVICE
+    u_pred = model.forward(
+        torch.tensor(ref_x, dtype=torch.float32).to(DEVICE),
+        torch.tensor(ref_y, dtype=torch.float32).to(DEVICE),
+    ).detach().cpu().numpy()
+
+    # Create GridFunction for PINN solution on reference mesh
+    reference_fes = reference_solution.space
+    u_pinn_on_ref = GridFunction(reference_fes)
+    u_pinn_on_ref.vec[:] = BaseVector(u_pred.flatten())
+
+    # Compute error: (PINN - reference)^2
+    error = (u_pinn_on_ref - reference_solution) * (u_pinn_on_ref - reference_solution)
+
+    # Compute integrated error metrics
+    total_error = Integrate(error, reference_mesh, VOL)
+    boundary_error = Integrate(error, reference_mesh, BND)
+
+    # Store error history in model
+    if not hasattr(model, "total_error_history"):
+        model.total_error_history = []
+    if not hasattr(model, "boundary_error_history"):
+        model.boundary_error_history = []
+        
+    model.total_error_history.append(total_error)
+    model.boundary_error_history.append(boundary_error)
+
+    # Export visualization if requested
+    if export_images and iteration is not None:
+        from visualization import export_to_png
+        
+        # Project error CoefficientFunction to GridFunction for visualization
+        error_gf = GridFunction(reference_fes)
+        error_gf.Set(error)  # Project the coefficient function to grid function
+        
+        # Debug: Check error field values
+        error_values = error_gf.vec.FV().NumPy()
+        print(f"Random error visualization - Range: {error_values.min():.2e} to {error_values.max():.2e}, Mean: {error_values.mean():.2e}")
+        
+        export_to_png(
+            reference_mesh,
+            error_gf,  # Use GridFunction instead of CoefficientFunction
+            fieldname="random_errors",
+            filename=f"random_errors_{iteration}.png",
+        )
+
+    print(f"Random Model - Total Error (vs reference): {total_error:.6e}, Boundary Error: {boundary_error:.6e}")
