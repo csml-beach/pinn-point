@@ -25,7 +25,7 @@ def main():
     mesh_size = MESH_CONFIG["maxh"]
     num_adaptations = TRAINING_CONFIG["iterations"]
     epochs = TRAINING_CONFIG["epochs"]
-    export_images = False  # Set to True to save images during training
+    export_images = True  # Set to True to save images during training (including error fields)
     
     print(f"\nExperiment Configuration:")
     print(f"  Initial mesh size: {mesh_size}")

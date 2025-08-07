@@ -60,9 +60,18 @@ def compute_model_error(model, reference_mesh, reference_solution, export_images
     # Export visualization if requested
     if export_images and iteration is not None:
         from visualization import export_to_png
+        
+        # Project error CoefficientFunction to GridFunction for visualization
+        error_gf = GridFunction(reference_fes)
+        error_gf.Set(error)  # Project the coefficient function to grid function
+        
+        # Debug: Check error field values
+        error_values = error_gf.vec.FV().NumPy()
+        print(f"Error visualization - Range: {error_values.min():.2e} to {error_values.max():.2e}, Mean: {error_values.mean():.2e}")
+        
         export_to_png(
             reference_mesh,
-            error,  # Error field on reference mesh
+            error_gf,  # Use GridFunction instead of CoefficientFunction
             fieldname="errors",
             filename=f"errors_{iteration}.png",
         )

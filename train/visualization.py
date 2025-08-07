@@ -67,9 +67,18 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
         try:
             # Try off-screen rendering first (no interactive windows)
             plotter = pv.Plotter(window_size=[size, size], off_screen=True)
-            plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr")
+            
+            # Add mesh with same colormap for both errors and residuals
+            if "error" in fieldname.lower():
+                # Use same 'bwr' colormap as residuals for consistency
+                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+            else:
+                # Use blue-white-red for other fields (residuals, etc.)
+                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+            
+            # Add wireframe in black for better visibility
             plotter.add_mesh(
-                meshpv, color="white", style="wireframe", show_scalar_bar=False
+                meshpv, color="black", style="wireframe", show_scalar_bar=False, line_width=1
             )
             plotter.view_xy()
             
@@ -92,9 +101,19 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
                 # Fallback: use show with screenshot but print warning
                 print("Falling back to interactive mode - you may need to close the plot window")
                 plotter = pv.Plotter(window_size=[size, size])
-                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr")
+                
+                # Add mesh with same colormap for both errors and residuals
+                if "error" in fieldname.lower():
+                    # Use same 'bwr' colormap as residuals for consistency
+                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                else:
+                    # Use blue-white-red for other fields (residuals, etc.)
+                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                
+                # Add wireframe in black for better visibility
                 plotter.add_mesh(
-                    meshpv, color="white", style="wireframe", show_scalar_bar=False
+                    meshpv, color="black", style="wireframe", show_scalar_bar=False, line_width=1
                 )
                 plotter.view_xy()
                 
