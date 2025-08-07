@@ -28,7 +28,7 @@ MODEL_CONFIG = {
 
 # Training parameters
 TRAINING_CONFIG = {
-    "epochs": 100,
+    "epochs": 500,
     "iterations": 10,
     "lr": 1e-3,
     "optimizer": "Adam",
