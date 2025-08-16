@@ -54,10 +54,15 @@ VIZ_CONFIG = {
     "image_size": 600,
     "gif_duration": 1000,
     "gif_loop": 0,
+    # Optional fixed color ranges for consistency across plots
+    # Set to a tuple (vmin, vmax) to fix colorbar range; leave as None for auto-scaling
+    "residual_clim": (0.0, 30.0),  # e.g., (0.0, 1e-2)
+    "error_clim": (0.0, 200.0),     # e.g., (0.0, 1e-3)
 }
 
 # Random point generation
 RANDOM_CONFIG = {
-    "default_point_count": 1000,
-    "domain_bounds": (0, 5),  # (min, max) for x and y coordinates
+    "default_point_count": 200,
+    "domain_bounds": "auto",  # (min, max) for x and y coordinates; set to "auto" to use mesh bbox
+    "log_sampling_stats": True,  # write sampling stats to images/point_sampling_stats.txt
 }

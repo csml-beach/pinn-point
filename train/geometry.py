@@ -136,11 +136,20 @@ def get_random_points(mesh, random_point_count=None):
         random_point_count = RANDOM_CONFIG["default_point_count"]
     
     from config import RANDOM_CONFIG
-    domain_min, domain_max = RANDOM_CONFIG["domain_bounds"]
+    domain_bounds = RANDOM_CONFIG.get("domain_bounds", (0, 5))
+    # Prefer tight bounds if configured as "auto"
+    if domain_bounds == "auto" or domain_bounds is None:
+        verts = np.array([v.point for v in mesh.vertices])
+        # verts is (N, 2); compute per-axis mins/maxs and use global min/max
+        domain_min = float(np.min(verts))
+        domain_max = float(np.max(verts))
+    else:
+        domain_min, domain_max = domain_bounds
     
     random_points = []
     attempts = 0
-    max_attempts = random_point_count * 10  # Prevent infinite loops
+    # Scale attempt budget to improve likelihood of reaching target in complex domains
+    max_attempts = max(1000, random_point_count * 20)
     
     while len(random_points) < random_point_count and attempts < max_attempts:
         # Generate random (x,y) coordinates in the domain
@@ -149,15 +158,38 @@ def get_random_points(mesh, random_point_count=None):
         
         # Check if the generated point (x,y) is in the domain
         try:
-            if not mesh(x, y).nr == -1:
+            if mesh(x, y).nr != -1:
                 random_points.append((x, y))
-        except:
+        except Exception:
             # Point is outside domain, skip
             pass
         attempts += 1
     
+    # If oversampled, truncate to requested size
+    if len(random_points) > random_point_count:
+        random_points = random_points[:random_point_count]
+    
     if len(random_points) == 0:
         raise ValueError("Could not generate any valid random points in the domain")
+    
+    # Optional diagnostics
+    try:
+        if RANDOM_CONFIG.get("log_sampling_stats", False):
+            import os
+            os.makedirs("images", exist_ok=True)
+            acc = len(random_points)
+            rate = acc / max(attempts, 1)
+            with open(os.path.join("images", "point_sampling_stats.txt"), "a") as f:
+                f.write(
+                    f"requested={random_point_count}, accepted={acc}, attempts={attempts}, acceptance_rate={rate:.4f}, bounds=[{domain_min:.3f},{domain_max:.3f}]\n"
+                )
+    except Exception:
+        pass
+    
+    if len(random_points) < random_point_count:
+        print(
+            f"Warning: Requested {random_point_count} random points but generated {len(random_points)} after {attempts} attempts."
+        )
     
     rand_points = np.array(random_points)
     rand_x, rand_y = rand_points.T

@@ -3,6 +3,7 @@ High-level experiment runners for PINN adaptive mesh training.
 Contains the main experiment orchestration functions.
 """
 
+import os
 import torch
 from geometry import (
     create_initial_mesh,
@@ -14,7 +15,6 @@ from fem_solver import (
     solve_FEM,
     export_fem_solution,
     create_dataset,
-    export_vertex_coordinates,
 )
 from pinn_model import FeedForward
 from training import train_model
@@ -24,7 +24,7 @@ from utils import (
     create_directory_structure,
 )
 from visualization import create_essential_visualizations
-from config import DEVICE, DIRECTORY, TRAINING_CONFIG, MODEL_CONFIG
+from config import DEVICE, DIRECTORY, TRAINING_CONFIG
 
 
 def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images=False):
@@ -143,7 +143,6 @@ def run_adaptive_training_fair(
         FeedForward: Trained adaptive PINN model
     """
     from pinn_model import FeedForward
-    from training import train_model
     from mesh_refinement import adapt_mesh_and_train
     from config import DEVICE
 
@@ -341,7 +340,12 @@ def run_random_training_fair(
                 iteration=iteration,
             )
 
-        model.mesh_point_count_history.append(target_point_count)
+        # Record the actual count achieved (may be < target if rejection sampling underfills)
+        try:
+            actual_count = len(model.mesh_x)
+        except Exception:
+            actual_count = target_point_count
+        model.mesh_point_count_history.append(actual_count)
 
     print("Random training comparison completed")
     return model
@@ -415,7 +419,7 @@ def run_random_comparison(model, mesh, num_adaptations=None, epochs=None):
         rand_model.mesh_point_count_history.append(len(rand_model.mesh_x))
         fix_random_model_error(rand_model, mesh, gfu, eval_x, eval_y, fes)
 
-    print(f"Random training comparison completed")
+    print("Random training comparison completed")
     return rand_model
 
 

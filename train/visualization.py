@@ -62,6 +62,16 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
         print(f"Warning: Could not read VTK file for visualization: {e}")
         return
 
+    # Determine fixed color limits if configured
+    clim = None
+    try:
+        if "error" in fieldname.lower():
+            clim = VIZ_CONFIG.get("error_clim")
+        elif "residual" in fieldname.lower():
+            clim = VIZ_CONFIG.get("residual_clim")
+    except Exception:
+        clim = None
+
     # Create visualization if the field exists
     if fieldname in meshpv.point_data:
         try:
@@ -71,10 +81,10 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
             # Add mesh with same colormap for both errors and residuals
             if "error" in fieldname.lower():
                 # Use same 'bwr' colormap as residuals for consistency
-                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8, clim=clim)
             else:
                 # Use blue-white-red for other fields (residuals, etc.)
-                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8, clim=clim)
             
             # Add wireframe in black for better visibility
             plotter.add_mesh(
@@ -105,11 +115,11 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
                 # Add mesh with same colormap for both errors and residuals
                 if "error" in fieldname.lower():
                     # Use same 'bwr' colormap as residuals for consistency
-                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8, clim=clim)
                 else:
                     # Use blue-white-red for other fields (residuals, etc.)
-                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
-                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8)
+                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8, clim=clim)
+                    plotter.add_mesh(meshpv, scalars=fieldname, show_scalar_bar=True, cmap="bwr", opacity=0.8, clim=clim)
                 
                 # Add wireframe in black for better visibility
                 plotter.add_mesh(
