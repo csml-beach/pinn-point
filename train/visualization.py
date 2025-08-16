@@ -5,10 +5,21 @@ Focuses on the most scientifically valuable plots with clean, publication-ready 
 
 import os
 from PIL import Image
-
+from config import DIRECTORY, REPORTS_DIRECTORY, VIZ_CONFIG
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend - MUST be before pyplot import
 import matplotlib.pyplot as plt
+try:
+    from paths import images_dir as _images_dir, reports_dir as _reports_dir
+    images_dir = _images_dir
+    reports_dir = _reports_dir
+except Exception:
+    def images_dir():
+        return DIRECTORY
+    def reports_dir():
+        return REPORTS_DIRECTORY
+
+# Configure matplotlib backend before using pyplot
+matplotlib.use('Agg')  # Use non-interactive backend - MUST be before pyplot import
 plt.ioff()  # Turn off interactive mode
 
 # PyVista for 3D mesh visualization (imported on demand to handle missing dependency)
@@ -19,7 +30,6 @@ except ImportError:
     PYVISTA_AVAILABLE = False
     print("Warning: PyVista not available. 3D mesh visualizations will be disabled.")
 
-from config import DIRECTORY, VIZ_CONFIG
 
 
 def export_to_png(mesh, gfu, fieldname, filename, size=None):
@@ -100,7 +110,7 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
             plotter.scalar_bar.SetLabelFormat("%2.2e")
 
             # Save screenshot using off-screen rendering
-            output_path = os.path.join(DIRECTORY, filename)
+            output_path = os.path.join(images_dir(), filename)
             plotter.screenshot(output_path)
             plotter.close()  # Explicitly close the plotter
             print(f"Exported visualization to {output_path}")
@@ -134,7 +144,7 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
                 plotter.scalar_bar.SetHeight(0.7)
                 plotter.scalar_bar.SetLabelFormat("%2.2e")
 
-                output_path = os.path.join(DIRECTORY, filename)
+                output_path = os.path.join(images_dir(), filename)
                 plotter.show(screenshot=output_path)
                 print(f"Exported visualization to {output_path}")
             except Exception as e2:
@@ -277,6 +287,67 @@ def create_performance_summary(adaptive_model, random_model, save_path=None):
         print(summary_text)
     
     return summary_text
+
+
+def create_point_usage_table(adaptive_model, random_model, dataset_size, save_path=None):
+    """
+    Create a text table of per-iteration labeled and interior point counts for both methods.
+
+    Columns:
+      Iteration | LabeledDatasetSize | LabeledBatchSize | AdaptiveInterior | RandomInterior | Match
+
+    Args:
+        adaptive_model: Trained adaptive PINN model
+        random_model: Trained random PINN model
+        dataset_size: Size of the shared labeled dataset (FEM vertices)
+        save_path: Output path for the table (defaults to reports/point_usage_table.txt)
+    """
+    from config import MODEL_CONFIG
+
+    if save_path is None:
+        os.makedirs(reports_dir(), exist_ok=True)
+        save_path = os.path.join(reports_dir(), "point_usage_table.txt")
+
+    # Determine number of iterations from histories (index 0 is initial count)
+    adapt_hist = getattr(adaptive_model, "mesh_point_count_history", []) or []
+    rand_hist = getattr(random_model, "mesh_point_count_history", []) or []
+    # Adaptive often stores duplicates per iteration; use indices 1,3,5,...
+    adapt_iters = max(0, (len(adapt_hist) - 1 + 1) // 2)
+    rand_iters = max(0, len(rand_hist) - 1)
+    n_iters = min(adapt_iters, rand_iters)
+
+    labeled_batch = MODEL_CONFIG.get("num_data", None)
+
+    lines = []
+    lines.append("PER-ITERATION POINT USAGE TABLE")
+    lines.append("=" * 50)
+    lines.append("")
+    lines.append(
+        f"{'Iter':>4} | {'LabeledDatasetSize':>18} | {'LabeledBatchSize':>16} | {'AdaptiveInterior':>16} | {'RandomInterior':>14} | {'Match':>5}"
+    )
+    lines.append("-" * 90)
+
+    for i in range(1, n_iters + 1):
+        # Map iteration i -> adaptive index 1 + 2*(i-1); random index i
+        adapt_idx = 1 + 2 * (i - 1)
+        rand_idx = i
+        adapt_interior = adapt_hist[adapt_idx]
+        rand_interior = rand_hist[rand_idx]
+        match = "yes" if adapt_interior == rand_interior else "no"
+        lines.append(
+            f"{i:>4} | {dataset_size:>18} | {labeled_batch if labeled_batch is not None else 'N/A':>16} | {adapt_interior:>16} | {rand_interior:>14} | {match:>5}"
+        )
+
+    lines.append("")
+    lines.append("Notes:")
+    lines.append("- LabeledDatasetSize is the total FEM data points shared by both methods.")
+    lines.append("- LabeledBatchSize is the per-step sample size used in loss_data for both methods.")
+    lines.append("- AdaptiveInterior and RandomInterior are the number of PDE residual points per iteration.")
+    lines.append("- Adaptive values use indices 1,3,5,... to avoid duplicates stored per iteration.")
+
+    with open(save_path, "w") as f:
+        f.write("\n".join(lines))
+    print(f"Point usage table saved to {save_path}")
 
 
 @ensure_figure_closed
@@ -643,7 +714,7 @@ def create_essential_visualizations(adaptive_model, random_model, output_dir=Non
         cleanup_pngs: Whether to clean up PNG files after GIF creation
     """
     if output_dir is None:
-        output_dir = DIRECTORY
+        output_dir = images_dir()
     
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -655,7 +726,8 @@ def create_essential_visualizations(adaptive_model, random_model, output_dir=Non
     plot_method_comparison(adaptive_model, random_model, comparison_path)
     
     # 2. Performance summary
-    summary_path = os.path.join(output_dir, "performance_summary.txt")
+    os.makedirs(reports_dir(), exist_ok=True)
+    summary_path = os.path.join(reports_dir(), "performance_summary.txt")
     create_performance_summary(adaptive_model, random_model, summary_path)
     
     # 3. Training convergence plots
@@ -703,7 +775,7 @@ def create_detailed_visualizations(adaptive_model, random_model, reference_solut
         output_dir: Directory to save plots
     """
     if output_dir is None:
-        output_dir = DIRECTORY
+        output_dir = images_dir()
     
     print("Creating detailed visualizations...")
     

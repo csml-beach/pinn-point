@@ -24,7 +24,8 @@ from utils import (
     create_directory_structure,
 )
 from visualization import create_essential_visualizations
-from config import DEVICE, DIRECTORY, TRAINING_CONFIG
+from config import DEVICE, TRAINING_CONFIG
+from paths import images_dir, reports_dir
 
 
 def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images=False):
@@ -271,16 +272,12 @@ def run_random_training_fair(
     for iteration in range(num_adaptations):
         print(f"\nRandom training iteration: {iteration + 1}/{num_adaptations}")
 
-        # Use adaptive model's actual point count progression if available
-        # Skip duplicates: indices 1, 3, 5, ... contain unique post-refinement counts
+        # Use adaptive model's point count at the same iteration index if available
         if adaptive_model:
-            target_index = 1 + (iteration * 2)  # Maps iteration 0->1, 1->3, 2->5, etc.
-            if target_index < len(adaptive_model.mesh_point_count_history):
-                target_point_count = adaptive_model.mesh_point_count_history[
-                    target_index
-                ]
+            if iteration < len(adaptive_model.mesh_point_count_history):
+                target_point_count = adaptive_model.mesh_point_count_history[iteration]
                 print(
-                    f"Matching adaptive post-refinement: using {target_point_count:,} points (index {target_index})"
+                    f"Matching adaptive (same-iteration index {iteration}): using {target_point_count:,} points"
                 )
             else:
                 # Fallback: use the last available count
@@ -298,6 +295,11 @@ def run_random_training_fair(
         random_x, random_y = get_random_points(
             mesh=initial_mesh, random_point_count=target_point_count
         )
+        # Ensure strict truncation in case of any oversampling
+        if len(random_x) > target_point_count:
+            random_x = random_x[:target_point_count]
+            random_y = random_y[:target_point_count]
+
         model.mesh_x = torch.tensor(random_x).to(DEVICE)
         model.mesh_y = torch.tensor(random_y).to(DEVICE)
 
@@ -559,10 +561,23 @@ def run_complete_experiment(
         create_essential_visualizations(
             trained_models["adaptive"],
             trained_models["random"],
-            output_dir=DIRECTORY,
+            output_dir=images_dir(),
             include_gifs=True,      # Include both residual and error GIFs
             cleanup_pngs=True,      # Clean up PNG files after GIF creation
         )
+
+        # Also write a per-iteration point usage table to reports/
+        try:
+            from visualization import create_point_usage_table
+            dataset_size = len(shared_training_dataset)
+            create_point_usage_table(
+                trained_models["adaptive"],
+                trained_models["random"],
+                dataset_size=dataset_size,
+                save_path=os.path.join(reports_dir(), "point_usage_table.txt"),
+            )
+        except Exception as e:
+            print(f"Warning: Failed to create point usage table: {e}")
 
     print(f"\n{'='*80}")
     print("EXPERIMENT COMPLETED SUCCESSFULLY")

@@ -14,7 +14,9 @@ warnings.filterwarnings("ignore")
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 # Directory configuration
-DIRECTORY = os.path.join(os.path.dirname(os.path.dirname(__file__)), "images")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+DIRECTORY = os.path.join(PROJECT_ROOT, "images")
+REPORTS_DIRECTORY = os.path.join(PROJECT_ROOT, "reports")
 
 # Model hyperparameters
 MODEL_CONFIG = {
@@ -64,5 +66,5 @@ VIZ_CONFIG = {
 RANDOM_CONFIG = {
     "default_point_count": 200,
     "domain_bounds": "auto",  # (min, max) for x and y coordinates; set to "auto" to use mesh bbox
-    "log_sampling_stats": True,  # write sampling stats to images/point_sampling_stats.txt
+    "log_sampling_stats": True,  # write sampling stats to reports/point_sampling_stats.txt
 }

@@ -6,7 +6,7 @@ This is the entry point for running the complete experiment.
 from experiments import run_complete_experiment, run_parameter_study
 from config import TRAINING_CONFIG, MESH_CONFIG
 from utils import get_system_info, log_experiment_info, cleanup_gif_png_files, cleanup_all_temp_files
-import os
+from paths import generate_run_id, set_active_run, write_run_metadata
 
 
 def main():
@@ -21,19 +21,28 @@ def main():
     for key, value in system_info.items():
         print(f"  {key}: {value}")
     
+    # Create a per-run output folder (outputs/<run-id>/...)
+    run_id = generate_run_id("adapt-vs-rand")
+    run_paths = set_active_run(run_id)
+    print(f"\nRun ID: {run_id}")
+    print(f"Outputs root: {run_paths['root']}")
+
     # Configuration
     mesh_size = MESH_CONFIG["maxh"]
     num_adaptations = TRAINING_CONFIG["iterations"]
     epochs = TRAINING_CONFIG["epochs"]
     export_images = True  # Set to True to save images during training (including error fields)
     
-    print(f"\nExperiment Configuration:")
+    print("\nExperiment Configuration:")
     print(f"  Initial mesh size: {mesh_size}")
     print(f"  Adaptation iterations: {num_adaptations}")
     print(f"  Training epochs per iteration: {epochs}")
     print(f"  Export images: {export_images}")
     
     try:
+        # Write run metadata (configs + system + git) before run starts
+        write_run_metadata(extra={"phase": "before_run"})
+
         # Run the complete experiment
         result = run_complete_experiment(
             mesh_size=mesh_size,
@@ -57,6 +66,8 @@ def main():
             "export_images": export_images,
         }
         log_experiment_info(adaptive_model, config_info)
+        # Update run metadata post-run
+        write_run_metadata(extra={"phase": "after_run"})
         
         print("\n" + "="*60)
         print("EXPERIMENT SUMMARY")
@@ -88,9 +99,9 @@ def main():
                     improvement = final_random_error / final_adaptive_error if final_adaptive_error > 0 else float('inf')
                     print(f"  Adaptive vs Random improvement: ×{improvement:.2f}")
         
-        print(f"\nResults saved to: {os.path.abspath('./images/')}")
+        print(f"\nResults saved to: {run_paths['root']}")
         print("="*60)
-        
+
     except Exception as e:
         print(f"\nError during experiment: {e}")
         import traceback

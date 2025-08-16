@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import os
 from ngsolve import *
-from config import DEVICE, DIRECTORY, RANDOM_CONFIG
+from config import DEVICE, DIRECTORY
 
 
 def fix_random_model_error(model, mesh, gfu, mesh_x, mesh_y, fe_space):
@@ -78,7 +78,7 @@ def validate_mesh_points(mesh_x, mesh_y, mesh):
         try:
             if not mesh(float(x), float(y)).nr == -1:
                 valid_count += 1
-        except:
+        except Exception:
             pass
     
     return valid_count == len(mesh_x)
@@ -301,7 +301,9 @@ def log_experiment_info(model, config_info=None, filepath=None):
         None
     """
     if filepath is None:
-        filepath = os.path.join(DIRECTORY, "experiment_log.txt")
+        from config import REPORTS_DIRECTORY
+        os.makedirs(REPORTS_DIRECTORY, exist_ok=True)
+        filepath = os.path.join(REPORTS_DIRECTORY, "experiment_log.txt")
     
     with open(filepath, 'w') as f:
         f.write("PINN Adaptive Mesh Experiment Log\n")
@@ -417,11 +419,11 @@ def cleanup_gif_png_files(directory=None, patterns=None, dry_run=False):
     
     # Summary
     if dry_run:
-        print(f"\nDry run complete:")
+        print("\nDry run complete:")
         print(f"  {len(results['files_found'])} files would be deleted")
         print(f"  {results['total_size_freed']} bytes would be freed")
     else:
-        print(f"\nCleanup complete:")
+        print("\nCleanup complete:")
         print(f"  {len(results['files_deleted'])} files deleted")
         print(f"  {results['total_size_freed']} bytes freed")
         if results["errors"]:

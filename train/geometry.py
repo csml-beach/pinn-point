@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from netgen.occ import *
 from ngsolve import *
-from config import MESH_CONFIG, GEOMETRY_CONFIG
+from config import MESH_CONFIG, GEOMETRY_CONFIG, REPORTS_DIRECTORY
 
 
 def create_base_shape(length, width):
@@ -176,10 +176,10 @@ def get_random_points(mesh, random_point_count=None):
     try:
         if RANDOM_CONFIG.get("log_sampling_stats", False):
             import os
-            os.makedirs("images", exist_ok=True)
+            os.makedirs(REPORTS_DIRECTORY, exist_ok=True)
             acc = len(random_points)
             rate = acc / max(attempts, 1)
-            with open(os.path.join("images", "point_sampling_stats.txt"), "a") as f:
+            with open(os.path.join(REPORTS_DIRECTORY, "point_sampling_stats.txt"), "a") as f:
                 f.write(
                     f"requested={random_point_count}, accepted={acc}, attempts={attempts}, acceptance_rate={rate:.4f}, bounds=[{domain_min:.3f},{domain_max:.3f}]\n"
                 )
