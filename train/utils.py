@@ -4,6 +4,7 @@ Contains helper functions and utilities used across different modules.
 """
 
 import numpy as np
+import random
 import torch
 import os
 from ngsolve import *
@@ -115,6 +116,26 @@ def ensure_tensor(data, device=None):
         data = torch.tensor(data)
     
     return data.to(device)
+
+
+def set_global_seed(seed: int) -> None:
+    """Set seeds for Python, NumPy, and Torch for reproducibility."""
+    try:
+        random.seed(seed)
+    except Exception:
+        pass
+    try:
+        np.random.seed(seed)
+    except Exception:
+        pass
+    try:
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
 
 
 def create_directory_structure(base_dir=None):

@@ -4,7 +4,10 @@ Focuses on the most scientifically valuable plots with clean, publication-ready 
 """
 
 import os
+import csv
+from typing import List
 from PIL import Image
+import numpy as np
 from config import DIRECTORY, REPORTS_DIRECTORY, VIZ_CONFIG
 import matplotlib
 import matplotlib.pyplot as plt
@@ -162,6 +165,119 @@ def ensure_figure_closed(func):
         finally:
             plt.close('all')  # Close all figures to prevent hanging
     return wrapper
+
+
+def write_histories_csv(adaptive_model, random_model, filename: str = "histories.csv", output_dir: str | None = None) -> str:
+    """Write key training histories for both methods into a CSV for postprocessing.
+
+    Columns: iteration, adaptive_total_error, adaptive_total_residual,
+             random_total_error, random_total_residual
+
+    Returns: path to the CSV file.
+    """
+    if output_dir is None:
+        output_dir = reports_dir()
+    os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
+
+    a_err = list(getattr(adaptive_model, "total_error_history", []) or [])
+    a_res = list(getattr(adaptive_model, "total_residual_history", []) or [])
+    r_err = list(getattr(random_model, "total_error_history", []) or [])
+    r_res = list(getattr(random_model, "total_residual_history", []) or [])
+    n = max(len(a_err), len(a_res), len(r_err), len(r_res))
+
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "iteration",
+            "adaptive_total_error",
+            "adaptive_total_residual",
+            "random_total_error",
+            "random_total_residual",
+        ])
+        for i in range(n):
+            row = [
+                i,
+                a_err[i] if i < len(a_err) else "",
+                a_res[i] if i < len(a_res) else "",
+                r_err[i] if i < len(r_err) else "",
+                r_res[i] if i < len(r_res) else "",
+            ]
+            w.writerow(row)
+    print(f"Histories CSV saved to {path}")
+    return path
+
+
+@ensure_figure_closed
+def plot_ablation_error_shaded(run_roots: List[str], save_path: str, title: str = "Error vs Iteration (mean ± std)"):
+    """Aggregate error histories from multiple run roots and plot mean±std shading.
+
+    Expects each root to contain reports/histories.csv as produced by write_histories_csv.
+    """
+    # Collect series
+    A_list, R_list = [], []
+    for root in run_roots:
+        csv_path = os.path.join(root, "reports", "histories.csv")
+        if not os.path.exists(csv_path):
+            continue
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            a_vals, r_vals = [], []
+            for row in reader:
+                a = row.get("adaptive_total_error", "")
+                r = row.get("random_total_error", "")
+                try:
+                    a_vals.append(float(a)) if a != "" else a_vals.append(np.nan)
+                except Exception:
+                    a_vals.append(np.nan)
+                try:
+                    r_vals.append(float(r)) if r != "" else r_vals.append(np.nan)
+                except Exception:
+                    r_vals.append(np.nan)
+        if a_vals:
+            A_list.append(np.array(a_vals, dtype=float))
+        if r_vals:
+            R_list.append(np.array(r_vals, dtype=float))
+
+    def pad_stack(series):
+        if not series:
+            return np.empty((0, 0))
+        L = max(len(s) for s in series)
+        out = []
+        for s in series:
+            if len(s) < L:
+                s = np.concatenate([s, np.full(L - len(s), np.nan)])
+            out.append(s)
+        return np.vstack(out)
+
+    A = pad_stack(A_list)
+    R = pad_stack(R_list)
+
+    if A.size == 0 and R.size == 0:
+        print("No histories found; skipping ablation plot")
+        return
+
+    plt.figure(figsize=(7, 5))
+    plt.title(title)
+    plt.xlabel("Iteration")
+    plt.ylabel("Total Error")
+    plt.yscale("log")
+
+    def plot_band(M, color, label):
+        if M.size == 0:
+            return
+        mean = np.nanmean(M, axis=0)
+        std = np.nanstd(M, axis=0)
+        x = np.arange(len(mean))
+        plt.plot(x, mean, color=color, label=label, linewidth=2)
+        plt.fill_between(x, np.maximum(mean - std, 1e-32), mean + std, color=color, alpha=0.2)
+
+    plot_band(A, "tab:blue", "Adaptive (mean ± std)")
+    plot_band(R, "tab:orange", "Random (mean ± std)")
+    plt.legend()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Ablation plot saved to {save_path}")
 
 
 @ensure_figure_closed
