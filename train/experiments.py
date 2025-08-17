@@ -23,7 +23,8 @@ from utils import (
     print_model_summary,
     create_directory_structure,
 )
-from visualization import create_essential_visualizations
+from visualization import create_essential_visualizations, write_histories_csv
+from paths import generate_run_id, set_active_run, write_run_metadata
 from config import DEVICE, TRAINING_CONFIG
 from paths import images_dir, reports_dir
 
@@ -566,6 +567,12 @@ def run_complete_experiment(
             cleanup_pngs=True,      # Clean up PNG files after GIF creation
         )
 
+        # Persist histories for postprocessing (ablation aggregation)
+        try:
+            write_histories_csv(trained_models["adaptive"], trained_models["random"])  # writes to reports
+        except Exception as e:
+            print(f"Warning: Failed to write histories CSV: {e}")
+
         # Also write a per-iteration point usage table to reports/
         try:
             from visualization import create_point_usage_table
@@ -617,7 +624,20 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
                 print(f"\nRunning configuration: {config_name}")
 
                 try:
-                    adaptive_model, random_model = run_complete_experiment(
+                    # Create a unique run for this configuration
+                    run_id = generate_run_id(f"study-m{mesh_size}-i{num_adaptations}-e{epochs}")
+                    run_paths = set_active_run(run_id)
+                    write_run_metadata({
+                        "phase": "start",
+                        "study": True,
+                        "config": {
+                            "mesh_size": mesh_size,
+                            "num_adaptations": num_adaptations,
+                            "epochs": epochs,
+                        },
+                    })
+
+                    models = run_complete_experiment(
                         mesh_size=mesh_size,
                         num_adaptations=num_adaptations,
                         epochs=epochs,
@@ -626,9 +646,23 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
                         generate_report=False,
                     )
 
+                    adaptive_model = models.get("adaptive") if isinstance(models, dict) else None
+                    random_model = models.get("random") if isinstance(models, dict) else None
+
+                    # Persist histories to this run's reports for later aggregation
+                    if adaptive_model is not None and random_model is not None:
+                        try:
+                            write_histories_csv(adaptive_model, random_model)
+                        except Exception as e:
+                            print(f"Warning: Failed to write histories CSV for {config_name}: {e}")
+
+                    write_run_metadata({"phase": "end", "study": True})
+
                     results[config_name] = {
                         "adaptive_model": adaptive_model,
                         "random_model": random_model,
+                        "run_id": run_id,
+                        "root": run_paths["root"],
                         "config": {
                             "mesh_size": mesh_size,
                             "num_adaptations": num_adaptations,

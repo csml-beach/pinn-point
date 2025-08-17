@@ -21,10 +21,10 @@ REPORTS_DIRECTORY = os.path.join(PROJECT_ROOT, "reports")
 # Model hyperparameters
 MODEL_CONFIG = {
     "hidden_size": 50,
-    "num_data": 1000,  #  Size of data loss computation (how many FEM training points to use)
-    "num_bd": 5000,   # Size of boundary condition enforcement (how many boundary points to check)
+    "num_data": 1000,   #  Size of data loss computation (how many FEM training points to use)
+    "num_bd": 5000,     # Size of boundary condition enforcement (how many boundary points to check)
     "w_data": 1.0,      # loss_data weight
-    "w_interior": 1.0,   # loss_interior weight
+    "w_interior": 1.0,  # loss_interior weight
     "w_bc": 1.0,        # loss_bc weight
 }
 
@@ -34,6 +34,7 @@ TRAINING_CONFIG = {
     "iterations": 10,
     "lr": 1e-3,
     "optimizer": "Adam",
+    "seed" : None
 }
 
 # Mesh parameters

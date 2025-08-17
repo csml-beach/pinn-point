@@ -5,8 +5,10 @@ This is the entry point for running the complete experiment.
 
 from experiments import run_complete_experiment, run_parameter_study
 from config import TRAINING_CONFIG, MESH_CONFIG
-from utils import get_system_info, log_experiment_info, cleanup_gif_png_files, cleanup_all_temp_files
-from paths import generate_run_id, set_active_run, write_run_metadata
+from utils import get_system_info, log_experiment_info, cleanup_gif_png_files, cleanup_all_temp_files, set_global_seed
+from paths import generate_run_id, set_active_run, write_run_metadata, OUTPUTS_ROOT
+from visualization import plot_ablation_error_shaded
+import os
 
 
 def main():
@@ -15,6 +17,13 @@ def main():
     print("PINN Adaptive Mesh Experiment")
     print("===========================")
     
+    # Seed handling: respect config seed if provided; else generate one per run
+    seed = TRAINING_CONFIG.get("seed")
+    if seed is None:
+        seed = int.from_bytes(os.urandom(4), "little")
+    set_global_seed(seed)
+    print(f"Using random seed: {seed}")
+
     # Print system information
     system_info = get_system_info()
     print("\nSystem Information:")
@@ -22,7 +31,7 @@ def main():
         print(f"  {key}: {value}")
     
     # Create a per-run output folder (outputs/<run-id>/...)
-    run_id = generate_run_id("adapt-vs-rand")
+    run_id = generate_run_id(f"adapt-vs-rand-seed{seed}")
     run_paths = set_active_run(run_id)
     print(f"\nRun ID: {run_id}")
     print(f"Outputs root: {run_paths['root']}")
@@ -41,7 +50,7 @@ def main():
     
     try:
         # Write run metadata (configs + system + git) before run starts
-        write_run_metadata(extra={"phase": "before_run"})
+        write_run_metadata(extra={"phase": "before_run", "seed": seed})
 
         # Run the complete experiment
         result = run_complete_experiment(
@@ -67,7 +76,7 @@ def main():
         }
         log_experiment_info(adaptive_model, config_info)
         # Update run metadata post-run
-        write_run_metadata(extra={"phase": "after_run"})
+        write_run_metadata(extra={"phase": "after_run", "seed": seed})
         
         print("\n" + "="*60)
         print("EXPERIMENT SUMMARY")
@@ -193,6 +202,23 @@ def run_full_cleanup():
         return False
 
 
+def run_ablation_summary_plot(run_ids):
+    """Create shaded mean±std ablation plot from a list of run IDs.
+
+    Expects each run to have reports/histories.csv.
+    """
+    if not run_ids:
+        print("No run IDs provided for ablation plot")
+        return False
+    roots = [os.path.join(OUTPUTS_ROOT, rid) for rid in run_ids]
+    out_dir = os.path.join(OUTPUTS_ROOT, "ablation_summary")
+    os.makedirs(out_dir, exist_ok=True)
+    save_path = os.path.join(out_dir, "ablation_error_shaded.png")
+    plot_ablation_error_shaded(roots, save_path)
+    print(f"Ablation summary plot saved to: {save_path}")
+    return True
+
+
 if __name__ == "__main__":
     import sys
     
@@ -209,6 +235,13 @@ if __name__ == "__main__":
             success = run_simple_cleanup()
         elif mode == "cleanup-all":
             success = run_full_cleanup()
+        elif mode == "ablate-plot":
+            run_ids = sys.argv[2:]
+            if not run_ids:
+                print("Usage: python main.py ablate-plot <run-id> [<run-id> ...]")
+                success = False
+            else:
+                success = run_ablation_summary_plot(run_ids)
         else:
             print("Usage: python main.py [main|test|study|cleanup|cleanup-all]")
             print("  main       - Run full experiment (default)")
@@ -216,6 +249,7 @@ if __name__ == "__main__":
             print("  study      - Run parameter study example")
             print("  cleanup    - Clean up GIF-related PNG files")
             print("  cleanup-all - Clean up all temporary files")
+            print("  ablate-plot - Generate shaded ablation plot from run IDs")
             success = False
     else:
         # Default: run main experiment
