@@ -13,7 +13,7 @@ The code runs controlled experiments, saves per-run artifacts (plots, logs, meta
 
 ## Repo structure (high-level)
 - `train/`
-  - `main.py` — CLI entrypoint for single runs, parameter study demo, cleanup, and ablation plotting
+  - `main.py` — CLI entrypoint for single runs, hyperparameter studies, cleanup, and ablation plotting
   - `experiments.py` — experiment orchestration
   - `visualization.py` — publication-ready plots and GIFs
   - `pinn_model.py`, `training.py`, `mesh_refinement.py`, `geometry.py` — training and sampling logic
@@ -60,9 +60,9 @@ python3 train/main.py main
 python3 train/main.py test
 ```
 
-- Parameter study example (small demo grid)
+- Hyperparameter study (flexible grid with dotted keys; add --images to export figures)
 ```bash
-python3 train/main.py study
+python3 train/main.py hparams --images '{"MODEL_CONFIG.hidden_size":[32,64],"TRAINING_CONFIG.lr":[0.001,0.0003]}'
 ```
 
 - Clean up PNGs used for GIFs

@@ -3,7 +3,7 @@ Main execution script for PINN adaptive mesh training.
 This is the entry point for running the complete experiment.
 """
 
-from experiments import run_complete_experiment, run_parameter_study
+from experiments import run_complete_experiment, run_hyperparameter_study
 from config import TRAINING_CONFIG, MESH_CONFIG
 from utils import get_system_info, log_experiment_info, cleanup_gif_png_files, cleanup_all_temp_files, set_global_seed
 from paths import generate_run_id, set_active_run, write_run_metadata, OUTPUTS_ROOT
@@ -143,39 +143,7 @@ def run_quick_test():
         return False
 
 
-def run_parameter_study_example():
-    """Run an example parameter study."""
-    print("Running parameter study example...")
-    
-    # Define parameter ranges
-    mesh_sizes = [0.5, 0.7]
-    num_adaptations_list = [3, 5]
-    epochs_list = [1000, 2000]
-    
-    try:
-        results = run_parameter_study(
-            mesh_sizes=mesh_sizes,
-            num_adaptations_list=num_adaptations_list,
-            epochs_list=epochs_list
-        )
-        
-        print("\nParameter Study Results:")
-        for config_name, result in results.items():
-            if "error" in result:
-                print(f"  {config_name}: FAILED - {result['error']}")
-            else:
-                adaptive_model = result["adaptive_model"]
-                if adaptive_model.total_error_history:
-                    final_error = adaptive_model.total_error_history[-1]
-                    print(f"  {config_name}: Final error = {final_error:.2e}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"Parameter study failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+## Removed run_parameter_study_example in favor of flexible hparams study
 
 
 def run_simple_cleanup():
@@ -227,8 +195,36 @@ if __name__ == "__main__":
         
         if mode == "test":
             success = run_quick_test()
-        elif mode == "study":
-            success = run_parameter_study_example()
+    # 'study' mode removed; use 'hparams' instead
+        elif mode in ("hparams", "study-hparams"):
+            # Optional: allow a JSON grid file or inline JSON after the mode, and --images flag
+            import json
+            export_images = False
+            grid = None
+            args = sys.argv[2:]
+            # Parse flags first
+            if "--images" in args:
+                export_images = True
+                args = [a for a in args if a != "--images"]
+            # Remaining arg can be a path or inline JSON
+            if args:
+                candidate = args[0]
+                try:
+                    # Inline JSON
+                    if candidate.strip().startswith("{"):
+                        grid = json.loads(candidate)
+                    else:
+                        # Assume file path
+                        if os.path.exists(candidate):
+                            with open(candidate) as f:
+                                grid = json.load(f)
+                        else:
+                            print(f"Grid file not found: {candidate} (using default grid)")
+                except Exception as e:
+                    print(f"Warning: could not parse grid, using default. Error: {e}")
+            results = run_hyperparameter_study(grid=grid, export_images=export_images)
+            # Consider success if at least one run ok
+            success = any(r.get("status") == "ok" for r in results.values()) if results else False
         elif mode == "main":
             success = main()
         elif mode == "cleanup":
@@ -243,10 +239,10 @@ if __name__ == "__main__":
             else:
                 success = run_ablation_summary_plot(run_ids)
         else:
-            print("Usage: python main.py [main|test|study|cleanup|cleanup-all]")
+            print("Usage: python main.py [main|test|hparams|cleanup|cleanup-all|ablate-plot]")
             print("  main       - Run full experiment (default)")
             print("  test       - Run quick test with reduced parameters")
-            print("  study      - Run parameter study example")
+            print("  hparams    - Run hyperparameter study (optional JSON grid or file, add --images)")
             print("  cleanup    - Clean up GIF-related PNG files")
             print("  cleanup-all - Clean up all temporary files")
             print("  ablate-plot - Generate shaded ablation plot from run IDs")

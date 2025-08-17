@@ -25,7 +25,9 @@ from utils import (
 )
 from visualization import create_essential_visualizations, write_histories_csv
 from paths import generate_run_id, set_active_run, write_run_metadata
-from config import DEVICE, TRAINING_CONFIG
+from config import DEVICE, TRAINING_CONFIG, MODEL_CONFIG, MESH_CONFIG, RANDOM_CONFIG, VIZ_CONFIG
+from utils import set_global_seed
+import itertools
 from paths import images_dir, reports_dir
 
 
@@ -676,6 +678,185 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
 
     print(f"\n{'='*80}")
     print("PARAMETER STUDY COMPLETED")
+    print(f"{'='*80}")
+
+    return results
+
+
+def run_hyperparameter_study(grid: dict | None = None, export_images: bool = False) -> dict:
+    """Run a flexible hyperparameter study by overriding config values.
+
+    Grid keys use dotted paths into config dicts, e.g.:
+      - "MODEL_CONFIG.hidden_size": [32, 64]
+      - "TRAINING_CONFIG.lr": [1e-3, 3e-4]
+      - "MODEL_CONFIG.w_interior": [1.0, 2.0]
+      - "MESH_CONFIG.maxh": [0.5, 0.7]
+
+    For each combination, we:
+      - Apply overrides in-place to config dicts
+      - Seed RNG (fixed if provided in TRAINING_CONFIG, else per-run random)
+      - Create a run with metadata and histories
+      - Restore original configs after completion
+
+    Returns a dict mapping a short config tag to run details.
+    """
+
+    # Default grid if none provided
+    if grid is None:
+        grid = {
+            "TRAINING_CONFIG.lr": [1e-3, 5e-4, 1e-4],
+        }
+
+    # Helpers to resolve and set values in config dicts
+    def _get_target(parts):
+        top, key = parts
+        if top == "MODEL_CONFIG":
+            return MODEL_CONFIG, key
+        if top == "TRAINING_CONFIG":
+            return TRAINING_CONFIG, key
+        if top == "MESH_CONFIG":
+            return MESH_CONFIG, key
+        if top == "RANDOM_CONFIG":
+            return RANDOM_CONFIG, key
+        if top == "VIZ_CONFIG":
+            return VIZ_CONFIG, key
+        raise KeyError(f"Unsupported config root: {top}")
+
+    def _fmt_val(v):
+        if isinstance(v, float):
+            return f"{v:g}" if (abs(v) >= 1e-3 and abs(v) < 1e3) else f"{v:.0e}"
+        return str(v)
+
+    def _abbr(path):
+        mapping = {
+            "MODEL_CONFIG.hidden_size": "hs",
+            "MODEL_CONFIG.w_interior": "win",
+            "MODEL_CONFIG.w_data": "wd",
+            "MODEL_CONFIG.w_bc": "wbc",
+            "TRAINING_CONFIG.lr": "lr",
+            "TRAINING_CONFIG.epochs": "e",
+            "TRAINING_CONFIG.iterations": "it",
+            "TRAINING_CONFIG.optimizer": "opt",
+            "MESH_CONFIG.maxh": "m",
+            "MESH_CONFIG.refinement_threshold": "thr",
+            "RANDOM_CONFIG.default_point_count": "rpc",
+        }
+        return mapping.get(path, path.split(".")[-1])
+
+    # Snapshot originals to restore later
+    originals = {
+        "MODEL_CONFIG": MODEL_CONFIG.copy(),
+        "TRAINING_CONFIG": TRAINING_CONFIG.copy(),
+        "MESH_CONFIG": MESH_CONFIG.copy(),
+        "RANDOM_CONFIG": RANDOM_CONFIG.copy(),
+        "VIZ_CONFIG": VIZ_CONFIG.copy(),
+    }
+
+    # Build cartesian product of grid values
+    items = list(grid.items())
+    keys = [k for k, _ in items]
+    values_lists = [v for _, v in items]
+    combos = list(itertools.product(*values_lists))
+
+    results: dict = {}
+
+    print(f"\n{'='*80}")
+    print("STARTING HYPERPARAMETER STUDY")
+    print(f"{'='*80}")
+    print("Grid:")
+    for k, v in grid.items():
+        print(f"  - {k}: {v}")
+
+    for combo in combos:
+        # Apply overrides
+        overrides = {}
+        for path, val in zip(keys, combo):
+            parts = path.split(".")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid grid key '{path}', expected 'CONFIG.key'")
+            dct, key = _get_target(parts)
+            overrides[path] = val
+            dct[key] = val
+
+        # Seed: fixed if present, else random per run
+        seed = TRAINING_CONFIG.get("seed")
+        if seed is None:
+            import os as _os
+            seed = int.from_bytes(_os.urandom(4), "little")
+        set_global_seed(seed)
+
+        # Build a short tag for the run id
+        tag_parts = [f"{_abbr(k)}{_fmt_val(v)}" for k, v in overrides.items()]
+        tag = "hps-" + "-".join(tag_parts) + f"-seed{seed}"
+
+        # Create run and write metadata
+        run_id = generate_run_id(tag)
+        run_paths = set_active_run(run_id)
+        write_run_metadata({
+            "phase": "start",
+            "study": "hparams",
+            "overrides": overrides,
+            "seed": seed,
+        })
+
+        try:
+            # Pass current mesh/epochs if they were overridden; otherwise defaults inside runner apply
+            models = run_complete_experiment(
+                mesh_size=MESH_CONFIG.get("maxh"),
+                num_adaptations=TRAINING_CONFIG.get("iterations"),
+                epochs=TRAINING_CONFIG.get("epochs"),
+                export_images=export_images,
+                create_gifs=False,
+                generate_report=False,
+            )
+
+            adaptive_model = models.get("adaptive") if isinstance(models, dict) else None
+            random_model = models.get("random") if isinstance(models, dict) else None
+
+            # Persist histories
+            if adaptive_model is not None and random_model is not None:
+                try:
+                    write_histories_csv(adaptive_model, random_model)
+                except Exception as e:
+                    print(f"Warning: Failed to write histories CSV for {run_id}: {e}")
+
+            status = "ok"
+
+        except Exception as e:
+            print(f"Error in hparams combo {overrides}: {e}")
+            status = f"error: {e}"
+
+        finally:
+            write_run_metadata({
+                "phase": "end",
+                "study": "hparams",
+                "overrides": overrides,
+                "seed": seed,
+                "status": status,
+            })
+
+        results[run_id] = {
+            "run_id": run_id,
+            "root": run_paths["root"],
+            "overrides": overrides,
+            "seed": seed,
+            "status": status,
+        }
+
+        # Restore configs before next combo
+    MODEL_CONFIG.clear()
+    MODEL_CONFIG.update(originals["MODEL_CONFIG"])  # type: ignore
+    TRAINING_CONFIG.clear()
+    TRAINING_CONFIG.update(originals["TRAINING_CONFIG"])  # type: ignore
+    MESH_CONFIG.clear()
+    MESH_CONFIG.update(originals["MESH_CONFIG"])  # type: ignore
+    RANDOM_CONFIG.clear()
+    RANDOM_CONFIG.update(originals["RANDOM_CONFIG"])  # type: ignore
+    VIZ_CONFIG.clear()
+    VIZ_CONFIG.update(originals["VIZ_CONFIG"])  # type: ignore
+
+    print(f"\n{'='*80}")
+    print("HYPERPARAMETER STUDY COMPLETED")
     print(f"{'='*80}")
 
     return results
