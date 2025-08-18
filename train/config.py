@@ -33,7 +33,7 @@ TRAINING_CONFIG = {
     "epochs": 500,
     "iterations": 10,
     "lr": 1e-3,
-    "optimizer": "Adam",
+    "optimizer": "LBFGS",
     "seed" : None
 }
 
@@ -41,7 +41,7 @@ TRAINING_CONFIG = {
 MESH_CONFIG = {
     "maxh": 0.5,                    # Initial mesh size
     "refinement_threshold": 0.7,     # Threshold for mesh refinement (fraction of max error)
-    "reference_mesh_factor": 0.02,   # Factor for creating reference mesh (smaller = finer)
+    "reference_mesh_factor": 0.01,   # Factor for creating reference mesh (smaller = finer)
 }
 
 # Geometry parameters

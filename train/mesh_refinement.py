@@ -6,11 +6,340 @@ Contains functions for adaptive mesh refinement based on PINN residuals and erro
 import torch
 import numpy as np
 import os
-from ngsolve import *
+# Explicit ngsolve imports for static analyzers and clarity
+from ngsolve import GridFunction, BaseVector, Integrate, VOL, BND
 from geometry import export_vertex_coordinates
 from fem_solver import solve_FEM
 from training import train_model
 from config import DEVICE, DIRECTORY, MESH_CONFIG
+import math
+
+
+def compute_model_residual_on_reference(model, reference_mesh, reference_solution, export_images=False, iteration=None):
+    """Integrate PDE residual^2 over the same fine reference mesh used for error.
+
+    This is evaluation-only and must not be used for mesh refinement.
+    Records totals on model.fixed_total_residual_history and
+    model.fixed_boundary_residual_history.
+    """
+    # Coordinates on reference mesh (same approach as compute_model_error)
+    ref_coords = export_vertex_coordinates(reference_mesh)
+    try:
+        ref_x, ref_y = ref_coords.unbind(1)
+        tx, ty = ref_x.to(DEVICE).float(), ref_y.to(DEVICE).float()
+    except AttributeError:
+        # Fallback if export returns ndarray
+        import torch as _torch
+        tx = _torch.tensor(ref_coords[:, 0], dtype=_torch.float32, device=DEVICE)
+        ty = _torch.tensor(ref_coords[:, 1], dtype=_torch.float32, device=DEVICE)
+
+    # Evaluate PDE residual at reference vertices (requires gradients for autograd-based PDE terms)
+    tx.requires_grad_(True)
+    ty.requires_grad_(True)
+    with torch.enable_grad():
+        # Support alternate attribute names if present
+        if hasattr(model, "PDE_residual"):
+            r = model.PDE_residual(tx, ty)  # shape [N]
+        elif hasattr(model, "pde_residual"):
+            # Some models may expose a lowercase variant taking stacked coords
+            coords = torch.stack([tx, ty], dim=1)
+            coords.requires_grad_(True)
+            r = model.pde_residual(coords)
+        else:
+            raise AttributeError("Model does not expose PDE_residual or pde_residual")
+    r2 = (r * r).detach().cpu().numpy().reshape(-1)
+
+    # Create GridFunction for residual^2 on the reference FE space
+    reference_fes = reference_solution.space
+    residuals_gf = GridFunction(reference_fes)
+    # Try to set vector; if sizes differ, attempt anyway and let integration handle or raise
+    try:
+        residuals_gf.vec[:] = BaseVector(r2.flatten())
+    except Exception as e:
+        # Initialize histories if missing, then append NaN to keep CSV aligned
+        if not hasattr(model, "fixed_total_residual_history"):
+            model.fixed_total_residual_history = []
+        if not hasattr(model, "fixed_boundary_residual_history"):
+            model.fixed_boundary_residual_history = []
+        model.fixed_total_residual_history.append(float("nan"))
+        model.fixed_boundary_residual_history.append(float("nan"))
+        print(f"[Fixed residual] Failed to set GridFunction vector (len={r2.size}): {e}")
+        return
+
+    # Integrate over domain and boundary
+    try:
+        total_residual = Integrate(residuals_gf, reference_mesh, VOL)
+        boundary_residual = Integrate(residuals_gf, reference_mesh, BND)
+    except Exception as e:
+        # Append NaN on integration failure to avoid empty CSV columns
+        if not hasattr(model, "fixed_total_residual_history"):
+            model.fixed_total_residual_history = []
+        if not hasattr(model, "fixed_boundary_residual_history"):
+            model.fixed_boundary_residual_history = []
+        model.fixed_total_residual_history.append(float("nan"))
+        model.fixed_boundary_residual_history.append(float("nan"))
+        print(f"[Fixed residual] Integration failed: {e}")
+        return
+
+    # Store histories (initialize if missing)
+    if not hasattr(model, "fixed_total_residual_history"):
+        model.fixed_total_residual_history = []
+    if not hasattr(model, "fixed_boundary_residual_history"):
+        model.fixed_boundary_residual_history = []
+    if not hasattr(model, "fixed_rms_residual_history"):
+        model.fixed_rms_residual_history = []
+    model.fixed_total_residual_history.append(float(total_residual))
+    model.fixed_boundary_residual_history.append(float(boundary_residual))
+
+    # Compute and store RMS residual (area-normalized) for interpretability
+    try:
+        if not hasattr(model, "_reference_area"):
+            area = Integrate(1, reference_mesh, VOL)
+            model._reference_area = float(area)
+        area = getattr(model, "_reference_area", None)
+        if area and area > 0:
+            rms = math.sqrt(float(total_residual) / area)
+        else:
+            rms = float("nan")
+    except Exception:
+        rms = float("nan")
+    model.fixed_rms_residual_history.append(rms)
+
+    # Optional visualization
+    if export_images and iteration is not None:
+        from visualization import export_to_png
+        export_to_png(
+            reference_mesh,
+            residuals_gf,
+            fieldname="fixed_residual",
+            filename=f"fixed_residual_{iteration}.png",
+        )
+
+    try:
+        msg = f"[Fixed residual] Total: {total_residual:.6e}, Boundary: {boundary_residual:.6e}, RMS: {rms:.6e}"
+    except Exception:
+        msg = f"[Fixed residual] Total: {total_residual}, Boundary: {boundary_residual}, RMS: {rms}"
+    print(msg)
+
+
+def compute_model_residual_on_reference_quadrature(model, reference_mesh, export_images=False, iteration=None):
+    """Robust fixed-grid residual integral on the reference mesh.
+
+    Primary path: for each triangle, evaluate residual at its three vertices,
+    use mean(r^2) as element value, and sum area * mean(r^2).
+    Fallback: Monte Carlo over the domain if mesh APIs fail.
+    """
+    # Domain area (if available)
+    try:
+        domain_area = float(Integrate(1.0, reference_mesh, VOL))
+    except Exception:
+        domain_area = float("nan")
+
+    # Mesh-based per-element accumulation
+    try:
+        total = 0.0
+        area_sum = 0.0
+        for el in reference_mesh.Elements2D():
+            verts = []
+            for v in el.vertices:
+                p = reference_mesh[v].point
+                verts.append((p.x, p.y))
+            if len(verts) != 3:
+                continue
+            (x1, y1), (x2, y2), (x3, y3) = verts
+            area = abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) * 0.5
+            if area <= 0:
+                continue
+
+            # Evaluate residual at vertices
+            r2_vals = []
+            for (xq, yq) in ((x1, y1), (x2, y2), (x3, y3)):
+                tx = torch.tensor([xq], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                ty = torch.tensor([yq], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                with torch.enable_grad():
+                    if hasattr(model, "PDE_residual"):
+                        rq = model.PDE_residual(tx, ty)
+                    elif hasattr(model, "pde_residual"):
+                        coords = torch.stack([tx, ty], dim=1).requires_grad_(True)
+                        rq = model.pde_residual(coords)
+                    else:
+                        raise AttributeError("Model missing PDE_residual/pde_residual")
+                r2_val = float((rq * rq).detach().cpu().numpy().reshape(-1)[0])
+                if np.isfinite(r2_val):
+                    r2_vals.append(r2_val)
+
+            if not r2_vals:
+                continue
+            mean_r2 = float(np.mean(r2_vals))
+            total += area * mean_r2
+            area_sum += area
+
+        if area_sum <= 0:
+            raise RuntimeError("No positive-area triangles processed")
+        if not np.isfinite(domain_area) or domain_area <= 0:
+            domain_area = area_sum
+        rms = float(math.sqrt(total / domain_area))
+
+        if not hasattr(model, "fixed_total_residual_history"):
+            model.fixed_total_residual_history = []
+        model.fixed_total_residual_history.append(float(total))
+
+        print(f"[Fixed residual quad] Total: {total:.6e}, RMS(est): {rms:.6e}")
+        return
+    except Exception as e:
+        print(f"[Fixed residual quad] mesh-based integration failed: {e}. Falling back to Monte Carlo.")
+
+    # Fallback: Monte Carlo sampling inside the domain bounding box
+    try:
+        # Get bounding box from mesh coordinates
+        coords = export_vertex_coordinates(reference_mesh)
+        try:
+            xs, ys = coords[:, 0].cpu().numpy(), coords[:, 1].cpu().numpy()
+        except Exception:
+            xs, ys = np.asarray(coords[:, 0]), np.asarray(coords[:, 1])
+        xmin, xmax = float(np.min(xs)), float(np.max(xs))
+        ymin, ymax = float(np.min(ys)), float(np.max(ys))
+
+        # Sample points with rejection using mesh(...) membership
+        rng = np.random.default_rng()
+        target = 10000
+        acc_x, acc_y = [], []
+        attempts = 0
+        max_attempts = target * 20
+        while len(acc_x) < target and attempts < max_attempts:
+            rx = rng.uniform(xmin, xmax, size=2048)
+            ry = rng.uniform(ymin, ymax, size=2048)
+            for xq, yq in zip(rx, ry):
+                try:
+                    if reference_mesh(xq, yq).nr != -1:
+                        acc_x.append(xq)
+                        acc_y.append(yq)
+                        if len(acc_x) >= target:
+                            break
+                except Exception:
+                    pass
+            attempts += 2048
+
+        if len(acc_x) < 1000:
+            raise RuntimeError(f"Too few accepted samples: {len(acc_x)}")
+
+        tx = torch.tensor(acc_x, dtype=torch.float32, device=DEVICE, requires_grad=True)
+        ty = torch.tensor(acc_y, dtype=torch.float32, device=DEVICE, requires_grad=True)
+        with torch.enable_grad():
+            if hasattr(model, "PDE_residual"):
+                r = model.PDE_residual(tx, ty)
+            elif hasattr(model, "pde_residual"):
+                r = model.pde_residual(torch.stack([tx, ty], dim=1).requires_grad_(True))
+            else:
+                raise AttributeError("Model missing PDE_residual/pde_residual")
+        r2 = (r * r).detach().float().cpu().numpy()
+        r2 = r2[np.isfinite(r2)]
+        if r2.size == 0:
+            raise RuntimeError("All Monte Carlo residual^2 values are non-finite")
+
+        if not np.isfinite(domain_area) or domain_area <= 0:
+            domain_area = float(Integrate(1.0, reference_mesh, VOL))
+        total = float(np.mean(r2) * domain_area)
+        rms = float(math.sqrt(total / domain_area))
+
+        if not hasattr(model, "fixed_total_residual_history"):
+            model.fixed_total_residual_history = []
+        model.fixed_total_residual_history.append(total)
+
+        print(f"[Fixed residual MC] Total: {total:.6e}, RMS(est): {rms:.6e}")
+    except Exception as e:
+        if not hasattr(model, "fixed_total_residual_history"):
+            model.fixed_total_residual_history = []
+        model.fixed_total_residual_history.append(float("nan"))
+        print(f"[Fixed residual MC] failed: {e}")
+
+
+def compute_model_residual_rms_on_reference(model, reference_mesh, iteration=None):
+    """Compute RMS of PDE residual over reference mesh vertices (no integration or area weighting).
+
+    This provides a fair, mesh-independent scalar by sampling residuals at the reference mesh points
+    used for error evaluation.
+    """
+    # Get coordinates as tensors
+    ref_coords = export_vertex_coordinates(reference_mesh)
+    try:
+        ref_x, ref_y = ref_coords.unbind(1)
+        tx, ty = ref_x.to(DEVICE).float(), ref_y.to(DEVICE).float()
+    except Exception:
+        import torch as _torch
+        tx = _torch.tensor(ref_coords[:, 0], dtype=_torch.float32, device=DEVICE)
+        ty = _torch.tensor(ref_coords[:, 1], dtype=_torch.float32, device=DEVICE)
+
+    tx.requires_grad_(True)
+    ty.requires_grad_(True)
+    with torch.enable_grad():
+        if hasattr(model, "PDE_residual"):
+            r = model.PDE_residual(tx, ty)
+        elif hasattr(model, "pde_residual"):
+            coords = torch.stack([tx, ty], dim=1).requires_grad_(True)
+            r = model.pde_residual(coords)
+        else:
+            raise AttributeError("Model does not expose PDE_residual or pde_residual")
+
+    r2 = (r * r).detach().cpu().numpy().reshape(-1)
+    # Filter non-finite entries
+    import numpy as _np
+    r2 = r2[_np.isfinite(r2)]
+    if r2.size == 0:
+        rms = float("nan")
+    else:
+        rms = float(_np.sqrt(_np.mean(r2)))
+
+    if not hasattr(model, "fixed_rms_residual_history"):
+        model.fixed_rms_residual_history = []
+    model.fixed_rms_residual_history.append(rms)
+
+    try:
+        print(f"[Fixed residual RMS] RMS: {rms:.6e}")
+    except Exception:
+        print(f"[Fixed residual RMS] RMS: {rms}")
+
+
+def compute_model_error_rms_on_reference(model, reference_mesh, reference_solution, iteration=None):
+    """Compute RMS of model error (u_pred - u_ref) sampled at reference mesh vertices.
+
+    Keeps existing integrated error logic intact; this just adds an RMS time series.
+    """
+    # Coordinates
+    ref_coords = export_vertex_coordinates(reference_mesh)
+    try:
+        ref_x, ref_y = ref_coords.unbind(1)
+        tx, ty = ref_x.to(DEVICE).float(), ref_y.to(DEVICE).float()
+    except Exception:
+        import torch as _torch
+        tx = _torch.tensor(ref_coords[:, 0], dtype=_torch.float32, device=DEVICE)
+        ty = _torch.tensor(ref_coords[:, 1], dtype=_torch.float32, device=DEVICE)
+
+    with torch.no_grad():
+        u_pred = model.forward(tx, ty).detach().cpu().numpy().reshape(-1)
+
+    # Reference solution at dofs; assume P1 => dofs ~ vertices
+    try:
+        u_ref = reference_solution.vec.FV().NumPy().reshape(-1)
+    except Exception:
+        try:
+            u_ref = np.array([v for v in reference_solution.vec]).reshape(-1)
+        except Exception:
+            u_ref = None
+
+    import numpy as _np
+    if u_ref is None or u_ref.size != u_pred.size:
+        # Length mismatch; compute NaN and log once
+        rms = float("nan")
+        print(f"[Error RMS] length mismatch (pred={u_pred.size}, ref={0 if u_ref is None else u_ref.size}); set NaN")
+    else:
+        diff2 = (u_pred - u_ref) ** 2
+        diff2 = diff2[_np.isfinite(diff2)]
+        rms = float(_np.sqrt(_np.mean(diff2))) if diff2.size > 0 else float("nan")
+
+    if not hasattr(model, "total_error_rms_history"):
+        model.total_error_rms_history = []
+    model.total_error_rms_history.append(rms)
 
 
 def compute_model_error(model, reference_mesh, reference_solution, export_images=False, iteration=None):
@@ -56,6 +385,30 @@ def compute_model_error(model, reference_mesh, reference_solution, export_images
     # Store error history
     model.total_error_history.append(total_error)
     model.boundary_error_history.append(boundary_error)
+
+    # Also compute RMS of residuals on the same reference mesh (evaluation-only)
+    try:
+        compute_model_residual_rms_on_reference(
+            model, reference_mesh, iteration=iteration
+        )
+    except Exception as e:
+        print(f"Warning: failed fixed residual RMS evaluation (adaptive): {e}")
+
+    # Compute integration-based fixed residual as well (for comparison/plots)
+    try:
+        compute_model_residual_on_reference_quadrature(
+            model, reference_mesh, export_images=False, iteration=iteration
+        )
+    except Exception as e:
+        print(f"Warning: failed fixed residual integral evaluation (adaptive): {e}")
+
+    # And compute RMS of error at reference vertices for a DOF-agnostic metric
+    try:
+        compute_model_error_rms_on_reference(
+            model, reference_mesh, reference_solution, iteration=iteration
+        )
+    except Exception as e:
+        print(f"Warning: failed fixed error RMS evaluation (adaptive): {e}")
 
     # Export visualization if requested
     if export_images and iteration is not None:
@@ -165,6 +518,15 @@ def adapt_mesh_and_train(model, mesh, dataset, reference_mesh, reference_solutio
     
     # Train PINN model
     train_model(model, dataset, epochs)
+    # Fine-tune for a few extra epochs to stabilize after mesh changes
+    try:
+        base = epochs if isinstance(epochs, int) and epochs > 0 else 0
+        extra_epochs = max(1, int(0.2 * base)) if base > 0 else 1
+    except Exception:
+        extra_epochs = 1
+    if extra_epochs > 0:
+        print(f"Fine-tuning for {extra_epochs} extra epochs before evaluation")
+        train_model(model, dataset, extra_epochs)
     
     # Compute model error against high-fidelity reference solution
     compute_model_error(model, reference_mesh, reference_solution, export_images, iteration)
@@ -379,6 +741,30 @@ def compute_random_model_error(model, reference_mesh, reference_solution, export
         
     model.total_error_history.append(total_error)
     model.boundary_error_history.append(boundary_error)
+
+    # Also compute RMS of residuals on the same reference mesh (evaluation-only)
+    try:
+        compute_model_residual_rms_on_reference(
+            model, reference_mesh, iteration=iteration
+        )
+    except Exception as e:
+        print(f"Warning: failed fixed residual RMS evaluation (random): {e}")
+
+    # Compute integration-based fixed residual as well (for comparison/plots)
+    try:
+        compute_model_residual_on_reference_quadrature(
+            model, reference_mesh, export_images=False, iteration=iteration
+        )
+    except Exception as e:
+        print(f"Warning: failed fixed residual integral evaluation (random): {e}")
+
+    # And compute RMS of error at reference vertices for a DOF-agnostic metric
+    try:
+        compute_model_error_rms_on_reference(
+            model, reference_mesh, reference_solution, iteration=iteration
+        )
+    except Exception as e:
+        print(f"Warning: failed fixed error RMS evaluation (random): {e}")
 
     # Export visualization if requested
     if export_images and iteration is not None:

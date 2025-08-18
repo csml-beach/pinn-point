@@ -171,7 +171,9 @@ def write_histories_csv(adaptive_model, random_model, filename: str = "histories
     """Write key training histories for both methods into a CSV for postprocessing.
 
     Columns: iteration, adaptive_total_error, adaptive_total_residual,
-             random_total_error, random_total_residual
+             random_total_error, random_total_residual,
+             adaptive_fixed_total_residual, adaptive_fixed_boundary_residual,
+             random_fixed_total_residual, random_fixed_boundary_residual
 
     Returns: path to the CSV file.
     """
@@ -181,10 +183,21 @@ def write_histories_csv(adaptive_model, random_model, filename: str = "histories
     path = os.path.join(output_dir, filename)
 
     a_err = list(getattr(adaptive_model, "total_error_history", []) or [])
+    a_err_rms = list(getattr(adaptive_model, "total_error_rms_history", []) or [])
     a_res = list(getattr(adaptive_model, "total_residual_history", []) or [])
+    a_fix_tot = list(getattr(adaptive_model, "fixed_total_residual_history", []) or [])
+    a_fix_bnd = list(getattr(adaptive_model, "fixed_boundary_residual_history", []) or [])
+    a_fix_rms = list(getattr(adaptive_model, "fixed_rms_residual_history", []) or [])
+
     r_err = list(getattr(random_model, "total_error_history", []) or [])
+    r_err_rms = list(getattr(random_model, "total_error_rms_history", []) or [])
     r_res = list(getattr(random_model, "total_residual_history", []) or [])
-    n = max(len(a_err), len(a_res), len(r_err), len(r_res))
+    r_fix_tot = list(getattr(random_model, "fixed_total_residual_history", []) or [])
+    r_fix_bnd = list(getattr(random_model, "fixed_boundary_residual_history", []) or [])
+    r_fix_rms = list(getattr(random_model, "fixed_rms_residual_history", []) or [])
+
+    n = max(len(a_err), len(a_err_rms), len(a_res), len(a_fix_tot), len(a_fix_bnd), len(a_fix_rms),
+            len(r_err), len(r_err_rms), len(r_res), len(r_fix_tot), len(r_fix_bnd), len(r_fix_rms))
 
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
@@ -193,18 +206,37 @@ def write_histories_csv(adaptive_model, random_model, filename: str = "histories
             "adaptive_total_error",
             "adaptive_total_residual",
             "random_total_error",
+            "adaptive_total_error_rms",
+            "random_total_error_rms",
             "random_total_residual",
+            "adaptive_fixed_total_residual",
+            "adaptive_fixed_boundary_residual",
+            "random_fixed_total_residual",
+            "random_fixed_boundary_residual",
+            "adaptive_fixed_rms_residual",
+            "random_fixed_rms_residual",
         ])
         for i in range(n):
             row = [
                 i,
-                a_err[i] if i < len(a_err) else "",
-                a_res[i] if i < len(a_res) else "",
-                r_err[i] if i < len(r_err) else "",
-                r_res[i] if i < len(r_res) else "",
+                a_err[i] if i < len(a_err) else np.nan,
+                a_res[i] if i < len(a_res) else np.nan,
+                r_err[i] if i < len(r_err) else np.nan,
+                a_err_rms[i] if i < len(a_err_rms) else np.nan,
+                r_err_rms[i] if i < len(r_err_rms) else np.nan,
+                r_res[i] if i < len(r_res) else np.nan,
+                a_fix_tot[i] if i < len(a_fix_tot) else np.nan,
+                a_fix_bnd[i] if i < len(a_fix_bnd) else np.nan,
+                r_fix_tot[i] if i < len(r_fix_tot) else np.nan,
+                r_fix_bnd[i] if i < len(r_fix_bnd) else np.nan,
+                a_fix_rms[i] if i < len(a_fix_rms) else np.nan,
+                r_fix_rms[i] if i < len(r_fix_rms) else np.nan,
             ]
             w.writerow(row)
-    print(f"Histories CSV saved to {path}")
+    print(
+        f"Histories CSV saved to {path} | lens: a_err={len(a_err)}, a_res={len(a_res)}, a_fix={len(a_fix_tot)}, "
+        f"r_err={len(r_err)}, r_res={len(r_res)}, r_fix={len(r_fix_tot)}"
+    )
     return path
 
 
@@ -281,70 +313,219 @@ def plot_ablation_error_shaded(run_roots: List[str], save_path: str, title: str 
 
 
 @ensure_figure_closed
-def plot_method_comparison(adaptive_model, random_model, save_path=None):
-    """
-    Create a clean comparison plot showing the key performance metrics.
-    
-    Args:
-        adaptive_model: Trained adaptive PINN model
-        random_model: Trained random PINN model  
-        save_path: Optional path to save the plot
-    """
+def plot_ablation_fixed_residual_shaded(run_roots: List[str], save_path: str, title: str = "Fixed residual ∫Ω r^2 (mean ± std)"):
+    """Aggregate fixed residual histories from multiple run roots and plot mean±std shading."""
+    import csv
+    import numpy as np
+    A_list, R_list = [], []
+    for root in run_roots:
+        csv_path = os.path.join(root, "reports", "histories.csv")
+        if not os.path.exists(csv_path):
+            continue
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            a_vals, r_vals = [], []
+            for row in reader:
+                a = row.get("adaptive_fixed_total_residual", "")
+                r = row.get("random_fixed_total_residual", "")
+                try:
+                    a_vals.append(float(a)) if a != "" else a_vals.append(np.nan)
+                except Exception:
+                    a_vals.append(np.nan)
+                try:
+                    r_vals.append(float(r)) if r != "" else r_vals.append(np.nan)
+                except Exception:
+                    r_vals.append(np.nan)
+        if a_vals:
+            A_list.append(np.array(a_vals, dtype=float))
+        if r_vals:
+            R_list.append(np.array(r_vals, dtype=float))
+
+    def pad_stack(series):
+        if not series:
+            return np.empty((0, 0))
+        L = max(len(s) for s in series)
+        out = []
+        for s in series:
+            if len(s) < L:
+                s = np.concatenate([s, np.full(L - len(s), np.nan)])
+            out.append(s)
+        return np.vstack(out)
+
+    A = pad_stack(A_list)
+    R = pad_stack(R_list)
+
+    if A.size == 0 and R.size == 0:
+        print("No fixed residual histories found; skipping ablation fixed residual plot")
+        return
+
+    plt.figure(figsize=(7, 5))
+    plt.title(title)
+    plt.xlabel("Iteration")
+    plt.ylabel("∫Ω r(x)^2 dΩ")
+    plt.yscale("log")
+
+    def plot_band(M, color, label):
+        if M.size == 0:
+            return
+        mean = np.nanmean(M, axis=0)
+        std = np.nanstd(M, axis=0)
+        x = np.arange(len(mean))
+        plt.plot(x, mean, color=color, label=label, linewidth=2)
+        plt.fill_between(x, np.maximum(mean - std, 1e-32), mean + std, color=color, alpha=0.2)
+
+    plot_band(A, "tab:blue", "Adaptive (mean ± std)")
+    plot_band(R, "tab:orange", "Random (mean ± std)")
+    plt.legend()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Ablation fixed residual plot saved to {save_path}")
+
+
+@ensure_figure_closed
+def plot_fixed_residual_comparison(adaptive_model, random_model, save_path: str | None = None, title: str = "Fixed reference-mesh RMS residual"):
+    """Plot fixed-grid RMS residual histories for both methods on a semilog y-axis."""
+    a = list(getattr(adaptive_model, "fixed_rms_residual_history", []) or [])
+    r = list(getattr(random_model, "fixed_rms_residual_history", []) or [])
+    if not a and not r:
+        print("No fixed residual histories; skipping plot")
+        return
+
+    plt.figure(figsize=(7, 5))
+    plt.title(title)
+    plt.xlabel("Iteration")
+    plt.ylabel("RMS residual (sqrt(mean(r^2)))")
+    plt.yscale("log")
+    if a:
+        plt.semilogy(range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6)
+    if r:
+        plt.semilogy(range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    if save_path is None:
+        save_path = os.path.join(images_dir(), "fixed_residual_comparison.png")
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Fixed residual comparison saved to {save_path}")
+
+
+@ensure_figure_closed
+def plot_fixed_error_rms_comparison(adaptive_model, random_model, save_path: str | None = None, title: str = "Fixed reference-mesh RMS error"):
+    """Plot fixed-grid RMS error histories for both methods on a semilog y-axis."""
+    a = list(getattr(adaptive_model, "total_error_rms_history", []) or [])
+    r = list(getattr(random_model, "total_error_rms_history", []) or [])
+    if not a and not r:
+        print("No RMS error histories; skipping plot")
+        return
+
+    plt.figure(figsize=(7, 5))
+    plt.title(title)
+    plt.xlabel("Iteration")
+    plt.ylabel("RMS error (sqrt(mean((u-u_ref)^2)))")
+    plt.yscale("log")
+    if a:
+        plt.semilogy(range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6)
+    if r:
+        plt.semilogy(range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    if save_path is None:
+        save_path = os.path.join(images_dir(), "fixed_error_rms_comparison.png")
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Fixed RMS error comparison saved to {save_path}")
+
+
+@ensure_figure_closed
+def plot_error_integral_comparison(adaptive_model, random_model, save_path: str | None = None, title: str = "Integrated error ∫Ω (u-u_ref)^2 dΩ"):
+    """Plot integrated error histories for both methods on a semilog y-axis."""
+    a = list(getattr(adaptive_model, "total_error_history", []) or [])
+    r = list(getattr(random_model, "total_error_history", []) or [])
+    if not a and not r:
+        print("No integrated error histories; skipping plot")
+        return
+
+    plt.figure(figsize=(7, 5))
+    plt.title(title)
+    plt.xlabel("Iteration")
+    plt.ylabel("Integrated error ∫Ω (u-u_ref)^2 dΩ")
+    plt.yscale("log")
+    if a:
+        plt.semilogy(range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6)
+    if r:
+        plt.semilogy(range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    if save_path is None:
+        save_path = os.path.join(images_dir(), "error_integral_comparison.png")
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Integrated error comparison saved to {save_path}")
+
+
+@ensure_figure_closed
+def plot_fixed_residual_integral_comparison(adaptive_model, random_model, save_path: str | None = None, title: str = "Fixed reference-mesh ∫Ω r^2 dΩ"):
+    """Plot fixed-grid integral of residual^2 histories for both methods on a semilog y-axis."""
+    a = list(getattr(adaptive_model, "fixed_total_residual_history", []) or [])
+    r = list(getattr(random_model, "fixed_total_residual_history", []) or [])
+    if not a and not r:
+        print("No fixed residual integral histories; skipping plot")
+        return
+
+    plt.figure(figsize=(7, 5))
+    plt.title(title)
+    plt.xlabel("Iteration")
+    plt.ylabel("∫Ω r(x)^2 dΩ")
+    plt.yscale("log")
+    if a:
+        plt.semilogy(range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6)
+    if r:
+        plt.semilogy(range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    if save_path is None:
+        save_path = os.path.join(images_dir(), "fixed_residual_integral_comparison.png")
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Fixed residual integral comparison saved to {save_path}")
+
+
+ 
+
+
+@ensure_figure_closed
+def plot_points_vs_iteration(adaptive_model, save_path=None, title: str = "Interior points vs iteration (adaptive)"):
+    """Plot the number of interior residual points per iteration for the adaptive method."""
     try:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Error comparison
-        ax1 = axes[0]
-        if adaptive_model.total_error_history and random_model.total_error_history:
-            iterations = range(len(adaptive_model.total_error_history))
-            ax1.semilogy(iterations, adaptive_model.total_error_history, 
-                        'b-o', label='Adaptive Mesh', linewidth=2, markersize=6)
-            ax1.semilogy(iterations, random_model.total_error_history, 
-                        'r--s', label='Random Points', linewidth=2, markersize=6)
-            ax1.set_xlabel('Iteration')
-            ax1.set_ylabel('Total Error')
-            ax1.set_title('Error Reduction Comparison')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-        
-        # Point count progression
-        ax2 = axes[1] 
-        if adaptive_model.mesh_point_count_history:
-            # Remove duplicates for cleaner visualization
-            unique_counts = []
-            prev_count = None
-            for count in adaptive_model.mesh_point_count_history:
-                if count != prev_count:
-                    unique_counts.append(count)
-                    prev_count = count
-            
-            iterations = range(len(unique_counts))
-            ax2.plot(iterations, unique_counts, 'b-o', linewidth=2, markersize=8)
-            ax2.set_xlabel('Iteration')
-            ax2.set_ylabel('Number of Points')
-            ax2.set_title('Mesh Refinement Progression')
-            ax2.grid(True, alpha=0.3)
-            
-            # Add refinement factor annotation
-            if len(unique_counts) > 1:
-                factor = unique_counts[-1] / unique_counts[0]
-                ax2.text(0.02, 0.98, f'Refinement: ×{factor:.2f}', 
-                        transform=ax2.transAxes, va='top', 
-                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
-        
-        plt.tight_layout()
-        
+        hist = list(getattr(adaptive_model, "mesh_point_count_history", []) or [])
+        if not hist:
+            print("No point count history; skipping points vs iteration plot")
+            return
+        # Remove duplicates for cleaner visualization
+        unique_counts = []
+        prev = None
+        for c in hist:
+            if c != prev:
+                unique_counts.append(c)
+                prev = c
+        plt.figure(figsize=(7, 5))
+        plt.plot(range(len(unique_counts)), unique_counts, 'b-o', linewidth=2, markersize=6)
+        plt.xlabel('Iteration')
+        plt.ylabel('Number of interior residual points')
+        plt.title(title)
+        plt.grid(True, alpha=0.3)
+        if len(unique_counts) > 1 and unique_counts[0] > 0:
+            factor = unique_counts[-1] / unique_counts[0]
+            plt.text(0.02, 0.98, f'Grow: ×{factor:.2f}', transform=plt.gca().transAxes, va='top',
+                     bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"Method comparison saved to {save_path}")
-        
-        plt.close()  # Always close to prevent interactive display
-            
+            print(f"Points vs iteration saved to {save_path}")
     except Exception as e:
-        print(f"Error creating method comparison plot: {e}")
+        print(f"Error creating points vs iteration plot: {e}")
         import traceback
         traceback.print_exc()
-        plt.close()  # Close on error too
+        plt.close()
 
 
 def create_performance_summary(adaptive_model, random_model, save_path=None):
@@ -837,15 +1018,42 @@ def create_essential_visualizations(adaptive_model, random_model, output_dir=Non
     
     print("Creating essential visualizations...")
     
-    # 1. Method comparison (most important)
-    comparison_path = os.path.join(output_dir, "method_comparison.png")
-    plot_method_comparison(adaptive_model, random_model, comparison_path)
+    # 1. Error comparisons: integrated and RMS
+    err_int_path = os.path.join(output_dir, "error_integral_comparison.png")
+    plot_error_integral_comparison(adaptive_model, random_model, err_int_path)
+    err_rms_path = os.path.join(output_dir, "fixed_error_rms_comparison.png")
+    plot_fixed_error_rms_comparison(adaptive_model, random_model, err_rms_path)
+    
+    # 1b. Fixed-grid residual integral comparison for fair evaluation
+    fixed_residual_path = os.path.join(output_dir, "fixed_residual_comparison.png")
+    try:
+        plot_fixed_residual_comparison(adaptive_model, random_model, fixed_residual_path)
+    except Exception as e:
+        print(f"Warning: Failed to create fixed residual comparison plot: {e}")
+
+    # 1b2. Fixed-grid residual integral comparison (∫ r^2)
+    fixed_residual_int_path = os.path.join(output_dir, "fixed_residual_integral_comparison.png")
+    try:
+        plot_fixed_residual_integral_comparison(adaptive_model, random_model, fixed_residual_int_path)
+    except Exception as e:
+        print(f"Warning: Failed to create fixed residual integral comparison plot: {e}")
+
+    # 1c. Fixed-grid RMS error comparison
+    fixed_error_rms_path = os.path.join(output_dir, "fixed_error_rms_comparison.png")
+    try:
+        plot_fixed_error_rms_comparison(adaptive_model, random_model, fixed_error_rms_path)
+    except Exception as e:
+        print(f"Warning: Failed to create fixed RMS error comparison plot: {e}")
     
     # 2. Performance summary
     os.makedirs(reports_dir(), exist_ok=True)
     summary_path = os.path.join(reports_dir(), "performance_summary.txt")
     create_performance_summary(adaptive_model, random_model, summary_path)
     
+    # 2b. Interior points vs iteration (adaptive)
+    points_path = os.path.join(output_dir, "points_vs_iteration.png")
+    plot_points_vs_iteration(adaptive_model, points_path)
+
     # 3. Training convergence plots
     adaptive_training_path = os.path.join(output_dir, "adaptive_training_convergence.png")
     plot_training_convergence_simple(adaptive_model, "Adaptive Mesh", adaptive_training_path)
@@ -873,11 +1081,11 @@ def create_essential_visualizations(adaptive_model, random_model, output_dir=Non
     
     print(f"Essential visualizations saved to {output_dir}")
     if include_gifs:
-        print("Key files: method_comparison.png, performance_summary.txt")
+        print("Key files: error_integral_comparison.png, fixed_error_rms_comparison.png, performance_summary.txt")
         print("  Adaptive GIFs: adaptive_residual_evolution.gif, adaptive_error_evolution.gif")
         print("  Random GIFs: random_residual_evolution.gif, random_error_evolution.gif")
     else:
-        print("Key files: method_comparison.png, performance_summary.txt")
+        print("Key files: error_integral_comparison.png, fixed_error_rms_comparison.png, performance_summary.txt")
 
 
 def create_detailed_visualizations(adaptive_model, random_model, reference_solution=None, output_dir=None):
