@@ -30,16 +30,16 @@ MODEL_CONFIG = {
 
 # Training parameters
 TRAINING_CONFIG = {
-    "epochs": 500,
-    "iterations": 10,
+    "epochs": 500,    # number of epochs where the model is trained on data + interior points at each iteration before mesh refinement
+    "iterations": 10, # number of mesh refinements
     "lr": 1e-3,
-    "optimizer": "LBFGS",
+    "optimizer": "LBFGS", 
     "seed" : None
 }
 
 # Mesh parameters
 MESH_CONFIG = {
-    "maxh": 0.5,                    # Initial mesh size
+    "maxh": 0.5,                     # Initial mesh size
     "refinement_threshold": 0.7,     # Threshold for mesh refinement (fraction of max error)
     "reference_mesh_factor": 0.01,   # Factor for creating reference mesh (smaller = finer)
 }
