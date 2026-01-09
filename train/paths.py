@@ -83,19 +83,28 @@ def _get_git_info() -> Dict[str, str]:
     try:
         # Get commit
         res = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
         )
         if res.returncode == 0:
             info["commit"] = res.stdout.strip()
         # Get branch
         res = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=PROJECT_ROOT, capture_output=True, text=True
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
         )
         if res.returncode == 0:
             info["branch"] = res.stdout.strip()
         # Dirty state
         res = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=PROJECT_ROOT, capture_output=True, text=True
+            ["git", "status", "--porcelain"],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
         )
         if res.returncode == 0:
             info["dirty"] = "yes" if res.stdout.strip() else "no"
@@ -104,7 +113,9 @@ def _get_git_info() -> Dict[str, str]:
     return info
 
 
-def write_run_metadata(extra: Optional[Dict] = None, filename: str = "run_config.json") -> str:
+def write_run_metadata(
+    extra: Optional[Dict] = None, filename: str = "run_config.json"
+) -> str:
     """Write merged config + system + git metadata to reports directory.
 
     Returns the path to the written JSON file.

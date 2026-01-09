@@ -13,10 +13,10 @@ from config import DEVICE, MODEL_CONFIG
 
 class FeedForward(nn.Module):
     """Physics-Informed Neural Network for solving PDEs with adaptive mesh refinement."""
-    
+
     def __init__(self, mesh_x, mesh_y):
         """Initialize the PINN model.
-        
+
         Args:
             mesh_x: x-coordinates of mesh points
             mesh_y: y-coordinates of mesh points
@@ -62,11 +62,11 @@ class FeedForward(nn.Module):
 
     def forward(self, x, y):
         """Forward pass through the neural network.
-        
+
         Args:
             x: x-coordinates
             y: y-coordinates
-            
+
         Returns:
             Neural network output u(x,y)
         """
@@ -78,12 +78,12 @@ class FeedForward(nn.Module):
 
     def compute_derivative(self, u, x, n):
         """Compute the n-th order derivative of u with respect to x using automatic differentiation.
-        
+
         Args:
             u: Function values
             x: Input variable
             n: Order of derivative
-            
+
         Returns:
             n-th order derivative
         """
@@ -102,12 +102,18 @@ class FeedForward(nn.Module):
 
     def PDE_residual(self, x, y, use_meshgrid=False):
         """Compute the PDE residual for the Poisson equation: ∇²u + f = 0.
-        
+
+        NOTE: This is the default Poisson problem implementation.
+        For new PDEs, use the extensible problems module:
+            from problems import get_problem
+            problem = get_problem("poisson")  # or your custom problem
+            residual = problem.pde_residual(model, x, y)
+
         Args:
             x: x-coordinates
             y: y-coordinates
             use_meshgrid: Whether to use meshgrid for coordinates
-            
+
         Returns:
             PDE residual values
         """
@@ -132,10 +138,10 @@ class FeedForward(nn.Module):
 
     def loss_data(self, dataset):
         """Compute data loss using the provided dataset.
-        
+
         Args:
             dataset: PyTorch dataset with mesh coordinates and FEM solutions
-            
+
         Returns:
             Data loss value
         """
@@ -154,7 +160,7 @@ class FeedForward(nn.Module):
 
     def loss_interior(self):
         """Compute interior loss based on PDE residual.
-        
+
         Returns:
             Interior loss value
         """
@@ -164,7 +170,12 @@ class FeedForward(nn.Module):
 
     def loss_boundary_condition(self):
         """Compute boundary condition loss (Dirichlet BC: u = 0 on bottom boundary).
-        
+
+        NOTE: This is the default Poisson problem BC. For new PDEs, use:
+            from problems import get_problem
+            problem = get_problem("your_problem")
+            bc_loss = problem.boundary_loss(model, num_points)
+
         Returns:
             Boundary condition loss value
         """
@@ -179,10 +190,10 @@ class FeedForward(nn.Module):
 
     def compute_losses(self, dataset):
         """Compute all loss components.
-        
+
         Args:
             dataset: Training dataset
-            
+
         Returns:
             tuple: (loss_interior, loss_data, loss_bc)
         """
@@ -193,10 +204,10 @@ class FeedForward(nn.Module):
 
     def closure(self, dataset):
         """Closure function for optimizer.
-        
+
         Args:
             dataset: Training dataset
-            
+
         Returns:
             Total loss value
         """
@@ -212,7 +223,7 @@ class FeedForward(nn.Module):
 
     def get_training_history(self):
         """Get training loss history.
-        
+
         Returns:
             tuple: (total_loss, loss_bc, loss_interior, loss_data) arrays
         """

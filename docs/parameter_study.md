@@ -16,31 +16,7 @@ This document explains how to run parameter sweeps in this project to study how 
 
 ---
 
-## A) Basic parameter study (mesh size, iterations, epochs)
-This is a small demonstration study over a grid of:
-- mesh size (`MESH_CONFIG.maxh`)
-- number of adaptations (`TRAINING_CONFIG.iterations`)
-- epochs per iteration (`TRAINING_CONFIG.epochs`)
-
-Run from the repo root:
-```bash
-python3 train/main.py study
-```
-This invokes `run_parameter_study_example()` which calls `experiments.run_parameter_study(...)` with a small default grid.
-
-Customize the grid (two options):
-1) Quick edit the lists in `run_parameter_study_example()` in `train/main.py`.
-2) Call `run_parameter_study()` programmatically from a Python session, e.g.:
-```python
-from train.experiments import run_parameter_study
-results = run_parameter_study(mesh_sizes=[0.5, 0.7], num_adaptations_list=[5], epochs_list=[500, 1000])
-```
-
-Outputs: each configuration creates a distinct `outputs/<run-id>/` with a `reports/histories.csv` for later aggregation.
-
----
-
-## B) Flexible hyperparameter study (dotted-key grid)
+## Hyperparameter study (dotted-key grid)
 Use `hparams` to vary any combination across config dictionaries using dotted keys. Examples:
 - `MODEL_CONFIG.hidden_size`
 - `TRAINING_CONFIG.lr`

@@ -25,10 +25,18 @@ from utils import (
 )
 from visualization import create_essential_visualizations, write_histories_csv
 from paths import generate_run_id, set_active_run, write_run_metadata
-from config import DEVICE, TRAINING_CONFIG, MODEL_CONFIG, MESH_CONFIG, RANDOM_CONFIG, VIZ_CONFIG
+from config import (
+    DEVICE,
+    TRAINING_CONFIG,
+    MODEL_CONFIG,
+    MESH_CONFIG,
+    RANDOM_CONFIG,
+    VIZ_CONFIG,
+)
 from utils import set_global_seed
 import itertools
 from paths import images_dir, reports_dir
+from methods import get_method, list_methods
 
 
 def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images=False):
@@ -315,19 +323,17 @@ def run_random_training_fair(
         if export_images:
             from mesh_refinement import compute_random_residuals
             from fem_solver import solve_FEM
+
             gfu, fes = solve_FEM(initial_mesh)  # Get finite element space
             compute_random_residuals(
-                model,
-                initial_mesh, 
-                fes,
-                export_images=True,
-                iteration=iteration
+                model, initial_mesh, fes, export_images=True, iteration=iteration
             )
 
         # Error assessment using same reference solution as adaptive method
         # Use specialized random error function that creates random_errors_*.png files
         if export_images:
             from mesh_refinement import compute_random_model_error
+
             compute_random_model_error(
                 model,
                 reference_mesh,
@@ -428,6 +434,142 @@ def run_random_comparison(model, mesh, num_adaptations=None, epochs=None):
     return rand_model
 
 
+def run_method_training_fair(
+    method_name: str,
+    initial_mesh,
+    shared_dataset,
+    reference_mesh,
+    reference_solution,
+    num_adaptations: int,
+    epochs: int,
+    export_images: bool,
+    reference_point_counts: list = None,
+):
+    """
+    Run training with any registered sampling method using shared components for fair comparison.
+
+    This is the generalized training function that works with all methods from the
+    methods registry (halton, sobol, random_r, rad, adaptive, random).
+
+    Args:
+        method_name: Name of method from methods registry
+        initial_mesh: Initial mesh object
+        shared_dataset: Shared training dataset (from initial mesh FEM solution)
+        reference_mesh: High-fidelity reference mesh for error assessment
+        reference_solution: High-fidelity reference solution for error assessment
+        num_adaptations: Number of adaptation iterations
+        epochs: Number of training epochs per iteration
+        export_images: Whether to export visualization images
+        reference_point_counts: Optional list of point counts to match (from adaptive method)
+
+    Returns:
+        FeedForward: Trained PINN model
+    """
+    from mesh_refinement import compute_model_error
+    from config import DEVICE, RAD_CONFIG, RANDOM_R_CONFIG, QUASI_RANDOM_CONFIG
+
+    print(f"\n{'='*60}")
+    print(f"METHOD TRAINING: {method_name.upper()}")
+    print(f"{'='*60}")
+
+    # Get method instance with appropriate config
+    domain_min = 0.0
+    domain_max = 5.0  # From GEOMETRY_CONFIG["domain_size"]
+
+    if method_name == "rad":
+        method = get_method(
+            method_name,
+            domain_bounds=(domain_min, domain_max),
+            k=RAD_CONFIG["k"],
+            c=RAD_CONFIG["c"],
+            num_candidates=RAD_CONFIG["num_candidates"],
+            resample_period=RAD_CONFIG["resample_period"],
+        )
+    elif method_name == "random_r":
+        method = get_method(
+            method_name,
+            domain_bounds=(domain_min, domain_max),
+            resample_period=RANDOM_R_CONFIG["resample_period"],
+        )
+    elif method_name in ("halton", "sobol"):
+        method = get_method(
+            method_name,
+            domain_bounds=(domain_min, domain_max),
+            seed=QUASI_RANDOM_CONFIG["seed"],
+        )
+    else:
+        # Fallback for other methods
+        try:
+            method = get_method(method_name, domain_bounds=(domain_min, domain_max))
+        except TypeError:
+            method = get_method(method_name)
+
+    print(f"Method: {method.name} - {method.description}")
+
+    # Get initial mesh coordinates
+    vertex_array = export_vertex_coordinates(initial_mesh)
+    mesh_x, mesh_y = vertex_array.T
+    initial_point_count = len(mesh_x)
+
+    print(f"Initial mesh: {initial_point_count:,} points")
+
+    # Initialize model
+    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y).to(DEVICE)
+    model.reference_mesh = reference_mesh
+    model.reference_solution = reference_solution
+
+    # Initialize tracking histories
+    model.mesh_point_history = [vertex_array.clone()]
+    model.mesh_point_count_history = [initial_point_count]
+    model.total_error_history = []
+    model.boundary_error_history = []
+
+    # Training iterations
+    for iteration in range(num_adaptations):
+        print(f"\n--- {method_name} Iteration {iteration + 1}/{num_adaptations} ---")
+
+        # Determine target point count
+        if reference_point_counts and iteration < len(reference_point_counts):
+            target_point_count = reference_point_counts[iteration]
+            print(f"Matching reference point count: {target_point_count:,}")
+        else:
+            # Use initial count (no mesh growth for non-adaptive methods)
+            target_point_count = initial_point_count
+
+        # Get collocation points using the method
+        x, y = method.get_collocation_points(
+            initial_mesh,
+            model=model,
+            iteration=iteration,
+            num_points=target_point_count,
+        )
+
+        # Update model's residual computation points
+        model.mesh_x = x.to(DEVICE)
+        model.mesh_y = y.to(DEVICE)
+
+        actual_count = len(model.mesh_x)
+        print(f"Using {actual_count:,} {method_name} points for residual computation")
+
+        # Train model
+        train_model(model, shared_dataset, epochs, lr=TRAINING_CONFIG["lr"])
+
+        # Compute and record error
+        compute_model_error(
+            model,
+            reference_mesh,
+            reference_solution,
+            export_images=export_images,
+            iteration=iteration,
+        )
+
+        # Record point count
+        model.mesh_point_count_history.append(actual_count)
+
+    print(f"\n{method_name} training completed")
+    return model
+
+
 def run_complete_experiment(
     mesh_size=None,
     num_adaptations=None,
@@ -524,34 +666,48 @@ def run_complete_experiment(
             trained_models["adaptive"] = model
 
         elif method == "random":
+            # Get reference point counts from adaptive if available
+            reference_counts = None
             if "adaptive" in trained_models:
-                print("Starting random point training...")
-                model = run_random_training_fair(
-                    initial_mesh,
-                    shared_training_dataset,
-                    reference_mesh,
-                    reference_solution,
-                    num_adaptations,
-                    epochs,
-                    export_images,
-                    adaptive_model=trained_models["adaptive"],
-                )
-                trained_models["random"] = model
-            else:
-                print("Starting random point training (without adaptive reference)...")
-                model = run_random_training_fair(
-                    initial_mesh,
-                    shared_training_dataset,
-                    reference_mesh,
-                    reference_solution,
-                    num_adaptations,
-                    epochs,
-                    export_images,
-                )
-                trained_models["random"] = model
+                reference_counts = trained_models["adaptive"].mesh_point_count_history
+
+            print("Starting random point training...")
+            model = run_random_training_fair(
+                initial_mesh,
+                shared_training_dataset,
+                reference_mesh,
+                reference_solution,
+                num_adaptations,
+                epochs,
+                export_images,
+                adaptive_model=trained_models.get("adaptive"),
+            )
+            trained_models["random"] = model
+
+        elif method in list_methods():
+            # Use generalized method training for all registered methods
+            # (halton, sobol, random_r, rad, etc.)
+            reference_counts = None
+            if "adaptive" in trained_models:
+                reference_counts = trained_models["adaptive"].mesh_point_count_history
+
+            print(f"Starting {method} training...")
+            model = run_method_training_fair(
+                method_name=method,
+                initial_mesh=initial_mesh,
+                shared_dataset=shared_training_dataset,
+                reference_mesh=reference_mesh,
+                reference_solution=reference_solution,
+                num_adaptations=num_adaptations,
+                epochs=epochs,
+                export_images=export_images,
+                reference_point_counts=reference_counts,
+            )
+            trained_models[method] = model
 
         else:
             print(f"Warning: Unknown method '{method}' - skipping")
+            print(f"Available methods: {list_methods()}")
 
     # Print summaries for all models
     for method_name, model in trained_models.items():
@@ -565,19 +721,22 @@ def run_complete_experiment(
             trained_models["adaptive"],
             trained_models["random"],
             output_dir=images_dir(),
-            include_gifs=True,      # Include both residual and error GIFs
-            cleanup_pngs=True,      # Clean up PNG files after GIF creation
+            include_gifs=True,  # Include both residual and error GIFs
+            cleanup_pngs=True,  # Clean up PNG files after GIF creation
         )
 
         # Persist histories for postprocessing (ablation aggregation)
         try:
-            write_histories_csv(trained_models["adaptive"], trained_models["random"])  # writes to reports
+            write_histories_csv(
+                trained_models["adaptive"], trained_models["random"]
+            )  # writes to reports
         except Exception as e:
             print(f"Warning: Failed to write histories CSV: {e}")
 
         # Also write a per-iteration point usage table to reports/
         try:
             from visualization import create_point_usage_table
+
             dataset_size = len(shared_training_dataset)
             create_point_usage_table(
                 trained_models["adaptive"],
@@ -588,11 +747,67 @@ def run_complete_experiment(
         except Exception as e:
             print(f"Warning: Failed to create point usage table: {e}")
 
+    # Write histories for all methods (generalized CSV output)
+    if generate_report and len(trained_models) >= 1:
+        try:
+            write_multi_method_histories_csv(trained_models)
+        except Exception as e:
+            print(f"Warning: Failed to write multi-method histories CSV: {e}")
+
     print(f"\n{'='*80}")
     print("EXPERIMENT COMPLETED SUCCESSFULLY")
     print(f"{'='*80}")
 
     return trained_models
+
+
+def write_multi_method_histories_csv(trained_models: dict):
+    """Write training histories for all methods to a single CSV file.
+
+    Args:
+        trained_models: Dictionary mapping method names to trained models
+    """
+    import csv
+
+    output_path = os.path.join(reports_dir(), "all_methods_histories.csv")
+
+    # Collect all data
+    rows = []
+    for method_name, model in trained_models.items():
+        # Get error history
+        total_errors = getattr(model, "total_error_history", [])
+        boundary_errors = getattr(model, "boundary_error_history", [])
+        point_counts = getattr(model, "mesh_point_count_history", [])
+
+        for i in range(max(len(total_errors), len(point_counts))):
+            rows.append(
+                {
+                    "method": method_name,
+                    "iteration": i,
+                    "total_error": total_errors[i] if i < len(total_errors) else None,
+                    "boundary_error": (
+                        boundary_errors[i] if i < len(boundary_errors) else None
+                    ),
+                    "point_count": point_counts[i] if i < len(point_counts) else None,
+                }
+            )
+
+    # Write CSV
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "method",
+                "iteration",
+                "total_error",
+                "boundary_error",
+                "point_count",
+            ],
+        )
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Multi-method histories written to: {output_path}")
 
 
 def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=None):
@@ -627,17 +842,21 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
 
                 try:
                     # Create a unique run for this configuration
-                    run_id = generate_run_id(f"study-m{mesh_size}-i{num_adaptations}-e{epochs}")
+                    run_id = generate_run_id(
+                        f"study-m{mesh_size}-i{num_adaptations}-e{epochs}"
+                    )
                     run_paths = set_active_run(run_id)
-                    write_run_metadata({
-                        "phase": "start",
-                        "study": True,
-                        "config": {
-                            "mesh_size": mesh_size,
-                            "num_adaptations": num_adaptations,
-                            "epochs": epochs,
-                        },
-                    })
+                    write_run_metadata(
+                        {
+                            "phase": "start",
+                            "study": True,
+                            "config": {
+                                "mesh_size": mesh_size,
+                                "num_adaptations": num_adaptations,
+                                "epochs": epochs,
+                            },
+                        }
+                    )
 
                     models = run_complete_experiment(
                         mesh_size=mesh_size,
@@ -648,15 +867,21 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
                         generate_report=False,
                     )
 
-                    adaptive_model = models.get("adaptive") if isinstance(models, dict) else None
-                    random_model = models.get("random") if isinstance(models, dict) else None
+                    adaptive_model = (
+                        models.get("adaptive") if isinstance(models, dict) else None
+                    )
+                    random_model = (
+                        models.get("random") if isinstance(models, dict) else None
+                    )
 
                     # Persist histories to this run's reports for later aggregation
                     if adaptive_model is not None and random_model is not None:
                         try:
                             write_histories_csv(adaptive_model, random_model)
                         except Exception as e:
-                            print(f"Warning: Failed to write histories CSV for {config_name}: {e}")
+                            print(
+                                f"Warning: Failed to write histories CSV for {config_name}: {e}"
+                            )
 
                     write_run_metadata({"phase": "end", "study": True})
 
@@ -683,7 +908,9 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
     return results
 
 
-def run_hyperparameter_study(grid: dict | None = None, export_images: bool = False) -> dict:
+def run_hyperparameter_study(
+    grid: dict | None = None, export_images: bool = False
+) -> dict:
     """Run a flexible hyperparameter study by overriding config values.
 
     Grid keys use dotted paths into config dicts, e.g.:
@@ -782,6 +1009,7 @@ def run_hyperparameter_study(grid: dict | None = None, export_images: bool = Fal
         seed = TRAINING_CONFIG.get("seed")
         if seed is None:
             import os as _os
+
             seed = int.from_bytes(_os.urandom(4), "little")
         set_global_seed(seed)
 
@@ -792,12 +1020,14 @@ def run_hyperparameter_study(grid: dict | None = None, export_images: bool = Fal
         # Create run and write metadata
         run_id = generate_run_id(tag)
         run_paths = set_active_run(run_id)
-        write_run_metadata({
-            "phase": "start",
-            "study": "hparams",
-            "overrides": overrides,
-            "seed": seed,
-        })
+        write_run_metadata(
+            {
+                "phase": "start",
+                "study": "hparams",
+                "overrides": overrides,
+                "seed": seed,
+            }
+        )
 
         try:
             # Pass current mesh/epochs if they were overridden; otherwise defaults inside runner apply
@@ -810,7 +1040,9 @@ def run_hyperparameter_study(grid: dict | None = None, export_images: bool = Fal
                 generate_report=False,
             )
 
-            adaptive_model = models.get("adaptive") if isinstance(models, dict) else None
+            adaptive_model = (
+                models.get("adaptive") if isinstance(models, dict) else None
+            )
             random_model = models.get("random") if isinstance(models, dict) else None
 
             # Persist histories
@@ -827,13 +1059,15 @@ def run_hyperparameter_study(grid: dict | None = None, export_images: bool = Fal
             status = f"error: {e}"
 
         finally:
-            write_run_metadata({
-                "phase": "end",
-                "study": "hparams",
-                "overrides": overrides,
-                "seed": seed,
-                "status": status,
-            })
+            write_run_metadata(
+                {
+                    "phase": "end",
+                    "study": "hparams",
+                    "overrides": overrides,
+                    "seed": seed,
+                    "status": status,
+                }
+            )
 
         results[run_id] = {
             "run_id": run_id,

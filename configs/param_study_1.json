@@ -1,0 +1,5 @@
+{
+  "TRAINING_CONFIG.lr": [1e-2, 5e-3, 1e-3, 5e-4, 1e-4],
+  "TRAINING_CONFIG.epochs": [125, 250, 500, 1000 , 2000 ],
+  "TRAINING_CONFIG.iterations": [5 , 10 , 15, 20]
+}
