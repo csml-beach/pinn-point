@@ -2,9 +2,26 @@
 
 This project compares Physics-Informed Neural Networks (PINNs) trained with:
 - **Adaptive mesh refinement** — selects new interior points where residuals are high
-- **Random interior point sampling** — baseline comparison
+- **Baseline and competitive methods** — including random, low-discrepancy, and adaptive distributions
 
 The code runs controlled experiments, saves per-run artifacts to `outputs/<run-id>/`, and supports ablation studies across multiple runs and seeds.
+
+## Available Methods
+
+You can benchmark and compare the following methods:
+- `adaptive` — Residual-based adaptive mesh refinement
+- `random` — Uniform random point sampling (baseline)
+- `halton` — Halton low-discrepancy sequence sampling
+- `sobol` — Sobol low-discrepancy sequence sampling
+- `random_r` — Uniform random with periodic resampling (Random-R)
+- `rad` — Residual-based Adaptive Distribution (Wu et al. 2022)
+
+Select methods via CLI/config:
+```bash
+python3 train/main.py main  # Default: adaptive + random
+python3 train/main.py main --methods adaptive random halton sobol rad
+```
+Or set `methods_to_run` in your config or experiment script.
 
 ## Quick Start
 
