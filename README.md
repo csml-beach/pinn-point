@@ -1,121 +1,77 @@
 # PINN Adaptive Mesh Experiments
 
 This project compares Physics-Informed Neural Networks (PINNs) trained with:
-- Adaptive mesh refinement (selects new interior points where residuals are high), versus
-- Random interior point sampling (baseline).
+- **Adaptive mesh refinement** — selects new interior points where residuals are high
+- **Random interior point sampling** — baseline comparison
 
-The code runs controlled experiments, saves per-run artifacts (plots, logs, metadata) into `outputs/<run-id>/`, and supports ablation studies across multiple runs and seeds.
+The code runs controlled experiments, saves per-run artifacts to `outputs/<run-id>/`, and supports ablation studies across multiple runs and seeds.
 
-## Key ideas
-- Fairness: both methods share the same labeled FEM data; only interior points differ (adaptive vs random).
-- Reproducibility: each run writes a JSON metadata file with configs, system info, and git state; the RNG seed is also recorded.
-- Postprocessing: each run emits a `reports/histories.csv`; you can aggregate many runs into a shaded mean±std error plot.
+## Quick Start
 
-## Repo structure (high-level)
-- `train/`
-  - `main.py` — CLI entrypoint for single runs, hyperparameter studies, cleanup, and ablation plotting
-  - `experiments.py` — experiment orchestration
-  - `visualization.py` — publication-ready plots and GIFs
-  - `pinn_model.py`, `training.py`, `mesh_refinement.py`, `geometry.py` — training and sampling logic
-  - `config.py` — all configs (model, training, mesh, random, viz)
-  - `paths.py` — per-run outputs manager and metadata writer
-- `outputs/<run-id>/` — per-run folder created automatically
-  - `images/` — plots, GIFs
-  - `reports/` — text summaries, histories CSV, run metadata (JSON)
-  - `checkpoints/`, `artifacts/` — optional
+```bash
+# Run a single experiment
+python3 train/main.py main
+
+# Quick test (small/fast)
+python3 train/main.py test
+
+# Hyperparameter study
+python3 train/main.py hparams configs/param_study_1.json --images
+
+# Show all commands
+python3 train/main.py help
+```
 
 ## Requirements
-- Python 3.10+ (3.11 recommended)
-- PyTorch
-- NumPy, Matplotlib
-- PyVista (for mesh visualizations)
-- NGSolve/Netgen (for FEM export)
 
-If you use Conda, see `notebooks/environment.yml` as a starting point.
+- Python 3.10+ (3.11 recommended)
+- PyTorch, NumPy, Matplotlib
+- NGSolve/Netgen (FEM), PyVista (mesh viz)
+
+See `notebooks/environment.yml` for a Conda setup.
+
+## Project Structure
+
+```
+pinn-point/
+├── train/           # Source code
+│   ├── main.py      # CLI entrypoint
+│   ├── config.py    # All configuration
+│   └── ...
+├── configs/         # Hyperparameter grid JSON files
+├── docs/            # Detailed documentation
+├── outputs/         # Per-run results (gitignored)
+└── notebooks/       # Jupyter notebooks
+```
 
 ## Configuration
-Edit `train/config.py` to control experiments:
-- MODEL_CONFIG
-  - `hidden_size`, `num_data`, `num_bd`, `w_data`, `w_interior`, `w_bc`
-- TRAINING_CONFIG
-  - `epochs`, `iterations`, `lr`, `optimizer`
-  - Optional: `seed` — fixed RNG seed for fully deterministic runs. If omitted, a random seed is generated per run and saved.
-- MESH_CONFIG
-  - `maxh` (initial mesh size), `refinement_threshold`, `reference_mesh_factor`
-- RANDOM_CONFIG
-  - `default_point_count`, `domain_bounds` ("auto" or bounds), `log_sampling_stats`
-- VIZ_CONFIG
-  - `image_size`, `gif_duration`, `gif_loop`, `residual_clim`, `error_clim` (fixed colorbar ranges)
 
-## CLI usage
-Run all commands from the repo root.
+Edit `train/config.py`:
 
-- Single run (default experiment)
-```bash
-python3 train/main.py main
-```
+| Config | Key settings |
+|--------|--------------|
+| `MODEL_CONFIG` | `hidden_size`, `w_data`, `w_interior`, `w_bc` |
+| `TRAINING_CONFIG` | `epochs`, `iterations`, `lr`, `seed` |
+| `MESH_CONFIG` | `maxh`, `refinement_threshold` |
 
-- Quick test (small/fast)
-```bash
-python3 train/main.py test
-```
+## Documentation
 
-- Hyperparameter study (flexible grid with dotted keys; add --images to export figures)
-```bash
-python3 train/main.py hparams --images '{"MODEL_CONFIG.hidden_size":[32,64],"TRAINING_CONFIG.lr":[0.001,0.0003]}'
-```
+- [Architecture Overview](docs/ARCHITECTURE.md) — code structure and design
+- [Parameter Studies](docs/parameter_study.md) — hyperparameter sweeps and ablation plots
+- [Output Format](docs/histories_csv.md) — CSV columns and metrics
 
-- Clean up PNGs used for GIFs
-```bash
-python3 train/main.py cleanup
-```
+## Outputs
 
-- Full cleanup of temporary files
-```bash
-python3 train/main.py cleanup-all
-```
+Each run creates `outputs/<timestamp>_<tag>/`:
+- `images/` — plots, GIFs
+- `reports/histories.csv` — metrics for aggregation
+- `reports/run_config.json` — full config, system info, git state, seed
 
-- Create a shaded ablation error plot from specific run IDs
-```bash
-python3 train/main.py ablate-plot <run-id-1> <run-id-2> ...
-```
+## Reproducibility
 
-## Examples and tips
-- Run the main experiment 7 times (ablation set):
-```bash
-for i in {1..7}; do python3 train/main.py main; done
-```
-
-- Build an ablation plot from the 7 most recent runs:
-```bash
-python3 train/main.py ablate-plot $(ls -1dt outputs/*/ | head -n 7 | xargs -n1 basename)
-```
-
-- Use all runs under `outputs/`:
-```bash
-python3 train/main.py ablate-plot $(find outputs -mindepth 1 -maxdepth 1 -type d -exec basename {} \;)
-```
-
-- Filter runs by pattern (e.g., only adapt-vs-rand):
-```bash
-python3 train/main.py ablate-plot $(find outputs -mindepth 1 -maxdepth 1 -type d -name '*adapt-vs-rand*' -exec basename {} \;)
-```
-
-## Outputs per run
-Created at `outputs/<timestamp>_<tag>/` where the tag includes the seed, e.g., `adapt-vs-rand-seed12345678`.
-- `images/`
-  - `method_comparison.png`
-  - `adaptive_training_convergence.png`, `random_training_convergence.png`
-  - Optional GIFs: `adaptive_residual_evolution.gif`, `adaptive_error_evolution.gif`, `random_residual_evolution.gif`, `random_error_evolution.gif`
-- `reports/`
-  - `performance_summary.txt`
-  - `histories.csv` (for ablation aggregation)
-  - `run_config.json` (configs + system + git + extras like seed and phase)
-
-## Reproducibility and seeds
-- If `TRAINING_CONFIG["seed"]` is set, that fixed seed is used and saved.
-- If not set, a random per-run seed is generated, used, included in the run ID, and saved in `reports/run_config.json`.
-
+- Set `TRAINING_CONFIG["seed"]` for deterministic runs
+- Or leave unset — a random seed is generated, saved, and included in the run ID
 
 ## Citation
-If this work helps your research, please cite appropriately. A short synopsis lives in `paper/pinn_adaptive_mesh_synopsis.tex`.
+
+If this work helps your research, please cite appropriately. See `paper/` for details.
