@@ -195,11 +195,11 @@ Already in `.gitignore`:
 
 ## Known Issues / Tech Debt
 
-1. **PDE coupling**: `pinn_model.py` and `fem_solver.py` have hardcoded Poisson equation. Use `problems/` module for new PDEs.
+See [docs/todo.md](/Users/arash/Documents/GitHub/pinn-point/docs/todo.md) for the active follow-up list.
 
-2. **Method dispatch**: `experiments.py` uses string-based if/else. Consider using `methods/` registry for cleaner extension.
+## TODO / Follow-ups
 
-3. **Geometry coupling**: L-shaped domain is hardcoded in `geometry.py`. Future: pass geometry as parameter to problem class.
+- [ ] Fix the residual quadrature path in `train/mesh_refinement.py`: `compute_model_residual_on_reference_quadrature()` still tries `reference_mesh.Elements2D()` and falls back to Monte Carlo on the current netgen/ngsolve backend. Replace that with a stable mesh traversal or integration path so the evaluation is backend-safe and deterministic.
 
 ## Testing Changes
 

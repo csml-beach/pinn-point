@@ -7,7 +7,7 @@ import torch
 from config import DEVICE, TRAINING_CONFIG
 
 
-def train_model(model, dataset, epochs=None, optimizer="Adam", **kwargs):
+def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
     """Train the PINN model using the specified optimizer.
 
     Args:
@@ -23,14 +23,19 @@ def train_model(model, dataset, epochs=None, optimizer="Adam", **kwargs):
     if epochs is None:
         epochs = TRAINING_CONFIG["epochs"]
 
+    if optimizer is None:
+        optimizer = TRAINING_CONFIG["optimizer"]
+
     # Set default learning rate if not provided
     if "lr" not in kwargs:
         kwargs["lr"] = TRAINING_CONFIG["lr"]
 
+    optimizer_name = optimizer.replace("-", "").upper()
+
     # Initialize optimizer
-    if optimizer == "Adam":
+    if optimizer_name == "ADAM":
         model.optimizer = torch.optim.Adam(model.parameters(), **kwargs)
-    elif optimizer == "L-BFGS":
+    elif optimizer_name == "LBFGS":
         model.optimizer = torch.optim.LBFGS(model.parameters(), **kwargs)
     else:
         raise ValueError(f"Unsupported optimizer: {optimizer}")
@@ -80,9 +85,11 @@ def setup_optimizer(model, optimizer_type="Adam", **kwargs):
     if "lr" not in kwargs:
         kwargs["lr"] = TRAINING_CONFIG["lr"]
 
-    if optimizer_type == "Adam":
+    optimizer_name = optimizer_type.replace("-", "").upper()
+
+    if optimizer_name == "ADAM":
         optimizer = torch.optim.Adam(model.parameters(), **kwargs)
-    elif optimizer_type == "L-BFGS":
+    elif optimizer_name == "LBFGS":
         optimizer = torch.optim.LBFGS(model.parameters(), **kwargs)
     else:
         raise ValueError(f"Unsupported optimizer type: {optimizer_type}")

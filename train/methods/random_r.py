@@ -26,7 +26,7 @@ class RandomResamplingMethod(TrainingMethod):
 
     def __init__(
         self,
-        domain_bounds: Tuple[float, float] = (0.0, 5.0),
+        domain_bounds: Tuple[float, float, float, float] = (0.0, 5.0, 0.0, 5.0),
         resample_period: int = 1,
         seed: Optional[int] = None,
     ):
@@ -54,15 +54,15 @@ class RandomResamplingMethod(TrainingMethod):
         Returns:
             Array of shape (num_points, 2) with valid interior points
         """
-        domain_min, domain_max = self.domain_bounds
+        x_min, x_max, y_min, y_max = self.domain_bounds
 
         valid_points = []
         max_attempts = max(1000, num_points * 20)
         attempts = 0
 
         while len(valid_points) < num_points and attempts < max_attempts:
-            x = self._rng.uniform(domain_min, domain_max)
-            y = self._rng.uniform(domain_min, domain_max)
+            x = self._rng.uniform(x_min, x_max)
+            y = self._rng.uniform(y_min, y_max)
 
             try:
                 if mesh(x, y).nr != -1:

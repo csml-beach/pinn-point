@@ -48,8 +48,12 @@ MESH_CONFIG = {
 GEOMETRY_CONFIG = {
     "base_l": 0.5,
     "base_w": 1.5,
-    "offset": 3,
+    "offset": "auto",
     "domain_size": 5,
+    "grid_n": 6,
+    "pattern_scale": "auto",
+    "circle_radius": 1.0,
+    "cell_fill": 0.6,
 }
 
 # Visualization parameters

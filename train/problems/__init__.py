@@ -30,7 +30,7 @@ PROBLEM_REGISTRY = {
 }
 
 
-def get_problem(name: str) -> PDEProblem:
+def get_problem(name: str, **kwargs) -> PDEProblem:
     """Get a problem instance by name.
 
     Args:
@@ -45,7 +45,7 @@ def get_problem(name: str) -> PDEProblem:
     if name not in PROBLEM_REGISTRY:
         available = ", ".join(PROBLEM_REGISTRY.keys())
         raise ValueError(f"Unknown problem '{name}'. Available: {available}")
-    return PROBLEM_REGISTRY[name]()
+    return PROBLEM_REGISTRY[name](**kwargs)
 
 
 def list_problems() -> list:

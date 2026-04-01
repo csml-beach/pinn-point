@@ -584,7 +584,7 @@ def adapt_mesh_and_train(
     refine_mesh(model, fe_space, mesh, export_images, iteration)
 
 
-def create_reference_solution(mesh_size_factor=0.05):
+def create_reference_solution(problem, mesh_size_factor=0.05):
     """Create a high-fidelity reference mesh and FEM solution.
 
     This should be called once at the beginning to create a very fine reference
@@ -596,18 +596,16 @@ def create_reference_solution(mesh_size_factor=0.05):
     Returns:
         tuple: (reference_mesh, reference_solution)
     """
-    from geometry import create_initial_mesh
-
     print(
         f"Creating high-fidelity reference solution with mesh size factor {mesh_size_factor}..."
     )
     print("Warning: This may take significant time and memory!")
 
     # Create very fine mesh
-    reference_mesh = create_initial_mesh(maxh=mesh_size_factor)
+    reference_mesh = problem.create_mesh(maxh=mesh_size_factor)
 
     # Solve FEM on reference mesh
-    reference_solution, reference_fes = solve_FEM(reference_mesh)
+    reference_solution, reference_fes = solve_FEM(reference_mesh, problem=problem)
 
     # Count points for information
     from geometry import export_vertex_coordinates

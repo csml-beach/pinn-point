@@ -5,8 +5,9 @@ This module defines the abstract interface that all PDE problems must implement.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any, Tuple
+
 import torch
-from typing import Tuple, Optional, Any
 
 
 class PDEProblem(ABC):
@@ -100,6 +101,36 @@ class PDEProblem(ABC):
             List of boundary name strings (e.g., ['bottom'])
         """
         return ["bottom"]  # Default, can be overridden
+
+    def create_mesh(self, maxh=None):
+        """Create a mesh for this problem.
+
+        The default implementation delegates to the existing project geometry.
+        Override in a problem subclass when the PDE owns a different geometry.
+        """
+        from geometry import create_initial_mesh
+
+        return create_initial_mesh(maxh=maxh)
+
+    def export_fem_solution(self, mesh, gfu) -> torch.Tensor:
+        """Evaluate a FEM solution at mesh vertices.
+
+        This avoids assuming that `gfu.vec` ordering always matches vertex order.
+        """
+        from geometry import export_vertex_coordinates
+
+        coords = export_vertex_coordinates(mesh).detach().cpu().numpy()
+        values = []
+        for x_coord, y_coord in coords:
+            try:
+                values.append(float(gfu(mesh(float(x_coord), float(y_coord)))))
+            except TypeError:
+                values.append(float(gfu(float(x_coord), float(y_coord))))
+        return torch.tensor(values, dtype=torch.float32)
+
+    def get_sampling_bounds(self) -> Tuple[float, float, float, float]:
+        """Get the axis-aligned bounds used by collocation samplers."""
+        return self.get_domain_bounds()
 
     def compute_derivative(
         self, u: torch.Tensor, var: torch.Tensor, order: int = 1

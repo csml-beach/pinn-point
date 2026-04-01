@@ -3,12 +3,200 @@ Main execution script for PINN adaptive mesh training.
 This is the entry point for running the complete experiment.
 """
 
+import json
+import os
+
 from experiments import run_complete_experiment, run_hyperparameter_study
 from config import TRAINING_CONFIG, MESH_CONFIG, PROJECT_ROOT
 from utils import get_system_info, log_experiment_info, set_global_seed
 from paths import generate_run_id, set_active_run, write_run_metadata, OUTPUTS_ROOT
 from visualization import plot_ablation_error_shaded
-import os
+
+
+SMOKE_DEFAULT_METHODS = ["adaptive", "random"]
+SMOKE_DEFAULT_MESH_SIZE = 0.7
+SMOKE_DEFAULT_NUM_ADAPTATIONS = 1
+SMOKE_DEFAULT_EPOCHS = 1
+SMOKE_DEFAULT_REFERENCE_MESH_FACTOR = 0.05
+
+
+def _resolve_seed():
+    seed = TRAINING_CONFIG.get("seed")
+    if seed is None:
+        seed = int.from_bytes(os.urandom(4), "little")
+    return int(seed)
+
+
+def _parse_methods_arg(raw_value):
+    methods = [method.strip() for method in raw_value.split(",") if method.strip()]
+    return methods or list(SMOKE_DEFAULT_METHODS)
+
+
+def _parse_smoke_args(args):
+    options = {
+        "seed": None,
+        "methods_to_run": list(SMOKE_DEFAULT_METHODS),
+        "mesh_size": SMOKE_DEFAULT_MESH_SIZE,
+        "num_adaptations": SMOKE_DEFAULT_NUM_ADAPTATIONS,
+        "epochs": SMOKE_DEFAULT_EPOCHS,
+        "reference_mesh_factor": SMOKE_DEFAULT_REFERENCE_MESH_FACTOR,
+        "problem_name": "poisson",
+        "problem_kwargs": None,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed value '{args[i + 1]}', using random")
+            i += 2
+            continue
+        if arg == "--methods" and i + 1 < len(args):
+            options["methods_to_run"] = _parse_methods_arg(args[i + 1])
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(
+                    f"Warning: invalid mesh size '{args[i + 1]}', using default smoke value"
+                )
+            i += 2
+            continue
+        if arg == "--iterations" and i + 1 < len(args):
+            try:
+                options["num_adaptations"] = int(args[i + 1])
+            except ValueError:
+                print(
+                    f"Warning: invalid iterations value '{args[i + 1]}', using default smoke value"
+                )
+            i += 2
+            continue
+        if arg == "--epochs" and i + 1 < len(args):
+            try:
+                options["epochs"] = int(args[i + 1])
+            except ValueError:
+                print(
+                    f"Warning: invalid epochs value '{args[i + 1]}', using default smoke value"
+                )
+            i += 2
+            continue
+        if arg == "--reference-mesh-factor" and i + 1 < len(args):
+            try:
+                options["reference_mesh_factor"] = float(args[i + 1])
+            except ValueError:
+                print(
+                    "Warning: invalid reference mesh factor "
+                    f"'{args[i + 1]}', using default smoke value"
+                )
+            i += 2
+            continue
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--problem-kwargs" and i + 1 < len(args):
+            try:
+                options["problem_kwargs"] = json.loads(args[i + 1])
+            except Exception as e:
+                print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported smoke arguments: {' '.join(ignored)}")
+    return options
+
+
+def run_smoke_test(
+    seed=None,
+    methods_to_run=None,
+    mesh_size=SMOKE_DEFAULT_MESH_SIZE,
+    num_adaptations=SMOKE_DEFAULT_NUM_ADAPTATIONS,
+    epochs=SMOKE_DEFAULT_EPOCHS,
+    reference_mesh_factor=SMOKE_DEFAULT_REFERENCE_MESH_FACTOR,
+    problem_name="poisson",
+    problem_kwargs=None,
+):
+    """Run a minimal end-to-end smoke test through the real training stack."""
+    print("Running smoke test...")
+
+    if seed is None:
+        seed = _resolve_seed()
+    seed = int(seed)
+    methods_to_run = methods_to_run or list(SMOKE_DEFAULT_METHODS)
+    set_global_seed(seed)
+
+    run_id = generate_run_id(f"smoke-seed{seed}")
+    run_paths = set_active_run(run_id)
+    print(f"Smoke run ID: {run_id}")
+    print(f"Outputs root: {run_paths['root']}")
+    print(
+        "Smoke configuration: "
+        f"mesh_size={mesh_size}, iterations={num_adaptations}, epochs={epochs}, "
+        f"reference_mesh_factor={reference_mesh_factor}, methods={methods_to_run}"
+    )
+
+    try:
+        write_run_metadata(
+            extra={
+                "phase": "smoke_before_run",
+                "seed": seed,
+                "methods": methods_to_run,
+                "problem": problem_name,
+            }
+        )
+
+        result = run_complete_experiment(
+            mesh_size=mesh_size,
+            num_adaptations=num_adaptations,
+            epochs=epochs,
+            export_images=False,
+            create_gifs=False,
+            generate_report=False,
+            methods_to_run=methods_to_run,
+            problem_name=problem_name,
+            problem_kwargs=problem_kwargs,
+            reference_mesh_factor=reference_mesh_factor,
+            seed=seed,
+        )
+
+        write_run_metadata(
+            extra={
+                "phase": "smoke_after_run",
+                "seed": seed,
+                "methods": methods_to_run,
+                "problem": problem_name,
+            }
+        )
+
+        print("\nSmoke test summary:")
+        for method_name, model in result.items():
+            total_errors = getattr(model, "total_error_history", [])
+            point_counts = getattr(model, "mesh_point_count_history", [])
+            final_error = total_errors[-1] if total_errors else None
+            final_points = point_counts[-1] if point_counts else None
+            print(
+                f"  {method_name}: "
+                f"points={final_points if final_points is not None else 'n/a'}, "
+                f"final_error={final_error if final_error is not None else 'n/a'}"
+            )
+
+        print(f"Smoke test completed successfully. Results: {run_paths['root']}")
+        return True
+    except Exception as e:
+        print(f"Smoke test failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
 
 
 def main():
@@ -18,9 +206,7 @@ def main():
     print("===========================")
 
     # Seed handling: respect config seed if provided; else generate one per run
-    seed = TRAINING_CONFIG.get("seed")
-    if seed is None:
-        seed = int.from_bytes(os.urandom(4), "little")
+    seed = _resolve_seed()
     set_global_seed(seed)
     print(f"Using random seed: {seed}")
 
@@ -63,6 +249,7 @@ def main():
             create_gifs=export_images,  # Only create GIFs if images are exported
             generate_report=True,
             methods_to_run=["adaptive", "random"],  # Default methods
+            seed=seed,
         )
 
         # Get models from the returned dictionary
@@ -138,9 +325,7 @@ def run_quick_test():
     print("Running quick test...")
 
     # Set up a proper run for test mode
-    seed = TRAINING_CONFIG.get("seed")
-    if seed is None:
-        seed = int.from_bytes(os.urandom(4), "little")
+    seed = _resolve_seed()
     set_global_seed(seed)
 
     run_id = generate_run_id(f"test-seed{seed}")
@@ -157,6 +342,7 @@ def run_quick_test():
             export_images=False,
             create_gifs=False,
             generate_report=True,  # Enable to test visualizations
+            seed=seed,
         )
         print(f"Quick test completed successfully! Results: {run_paths['root']}")
         return True
@@ -284,6 +470,12 @@ if __name__ == "__main__":
 
         if mode == "test":
             success = run_quick_test()
+        elif mode == "smoke":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            smoke_options = _parse_smoke_args(remaining)
+            if seed_override is not None:
+                smoke_options["seed"] = seed_override
+            success = run_smoke_test(**smoke_options)
         elif mode == "hparams":
             # Optional: allow a JSON grid file or inline JSON after the mode, and --images flag
             import json
@@ -341,12 +533,24 @@ if __name__ == "__main__":
                 success = run_ablation_summary_plot(run_ids)
         else:
             print(
-                "Usage: python main.py [main|test|hparams|cleanup|cleanup-all|ablate-plot]"
+                "Usage: python main.py "
+                "[main|smoke|test|hparams|cleanup|cleanup-all|ablate-plot]"
             )
             print("")
             print("Commands:")
             print("  main         Run full experiment (default)")
             print("               --seed <int>   Override random seed")
+            print("  smoke        Run a minimal end-to-end smoke test")
+            print("               --seed <int>   Override smoke-test seed")
+            print("               --methods <m1,m2>  Comma-separated method list")
+            print("               --mesh-size <f>     Initial mesh size")
+            print("               --iterations <n>    Adaptation steps")
+            print("               --epochs <n>        Training epochs per step")
+            print(
+                "               --reference-mesh-factor <f>  Reference mesh size factor"
+            )
+            print("               --problem <name>    Problem name")
+            print("               --problem-kwargs '{...}'  Inline JSON kwargs")
             print("  test         Run quick test with reduced parameters")
             print("  hparams      Run hyperparameter study")
             print("               [grid.json]    Path to JSON grid file")

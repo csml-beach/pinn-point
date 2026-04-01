@@ -1,0 +1,14 @@
+\section{Method}
+
+The repository pipeline couples mesh generation, a finite-element reference solve, supervised PINN training data, and iterative collocation updates. The main executable path begins in \texttt{train/main.py}, dispatches experiment orchestration through \texttt{train/experiments.py}, and evaluates multiple sampling strategies registered in \texttt{train/methods/}.
+
+\paragraph{Planned subsection outline.}
+\begin{itemize}
+    \item Problem setup: Poisson equation, boundary conditions, and geometry construction.
+    \item FEM reference solution and dataset generation.
+    \item PINN architecture, optimization loop, and reported losses.
+    \item Sampling strategies: adaptive, random, halton, sobol, random-r, and rad.
+    \item Fair-comparison protocol: shared supervision, matched point budgets, and common error evaluation.
+\end{itemize}
+
+Before this section is finalized, the paper should lock the exact notation, loss decomposition, and hyperparameter table that correspond to the experiments used in the final figures.

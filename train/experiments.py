@@ -3,43 +3,71 @@ High-level experiment runners for PINN adaptive mesh training.
 Contains the main experiment orchestration functions.
 """
 
+import copy
+import itertools
 import os
+
 import torch
-from geometry import (
-    create_initial_mesh,
-    get_initial_mesh_data,
-    export_vertex_coordinates,
-    get_random_points,
-)
-from fem_solver import (
-    solve_FEM,
-    export_fem_solution,
-    create_dataset,
-)
-from pinn_model import FeedForward
-from training import train_model
-from utils import (
-    fix_random_model_error,
-    print_model_summary,
-    create_directory_structure,
-)
-from visualization import create_essential_visualizations, write_histories_csv
-from paths import generate_run_id, set_active_run, write_run_metadata
+from ngsolve import H1, Mesh
+
 from config import (
     DEVICE,
-    TRAINING_CONFIG,
-    MODEL_CONFIG,
+    GEOMETRY_CONFIG,
     MESH_CONFIG,
+    MODEL_CONFIG,
     RANDOM_CONFIG,
+    TRAINING_CONFIG,
     VIZ_CONFIG,
 )
-from utils import set_global_seed
-import itertools
-from paths import images_dir, reports_dir
+from fem_solver import create_dataset, export_fem_solution, solve_FEM
+from geometry import (
+    create_initial_mesh,
+    export_vertex_coordinates,
+    get_random_points,
+    get_initial_mesh_data,
+)
 from methods import get_method, list_methods
+from paths import generate_run_id, images_dir, reports_dir, set_active_run, write_run_metadata
+from pinn_model import FeedForward
+from problems import get_problem
+from training import train_model
+from utils import (
+    create_directory_structure,
+    fix_random_model_error,
+    print_model_summary,
+    set_global_seed,
+)
+from visualization import create_essential_visualizations, write_histories_csv
 
 
-def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images=False):
+def _build_problem(problem_name: str = "poisson", problem_kwargs: dict | None = None):
+    kwargs = dict(problem_kwargs or {})
+    if problem_name == "poisson":
+        kwargs.setdefault("domain_size", GEOMETRY_CONFIG["domain_size"])
+    return get_problem(problem_name, **kwargs)
+
+
+def _clone_mesh(mesh):
+    return Mesh(mesh.ngmesh.Copy())
+
+
+def _method_seed(base_seed: int, method_name: str) -> int:
+    offset = sum((idx + 1) * ord(ch) for idx, ch in enumerate(method_name))
+    return (int(base_seed) + offset) % (2**31 - 1)
+
+
+def _build_initial_model_state(problem, vertex_array, base_seed: int):
+    set_global_seed(base_seed)
+    mesh_x, mesh_y = vertex_array.T
+    prototype = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    state = copy.deepcopy(prototype.state_dict())
+    del prototype
+    return state
+
+
+def run_adaptive_training(
+    mesh, num_adaptations=None, epochs=None, export_images=False, problem=None
+):
     """Run the main adaptive mesh training loop.
 
     Training Strategy:
@@ -60,6 +88,8 @@ def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images
         num_adaptations = TRAINING_CONFIG["iterations"]
     if epochs is None:
         epochs = TRAINING_CONFIG["epochs"]
+    if problem is None:
+        problem = _build_problem()
 
     print(f"Starting adaptive training on device: {DEVICE}")
     print(f"Configuration: {num_adaptations} iterations, {epochs} epochs per iteration")
@@ -72,14 +102,14 @@ def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images
     from config import MESH_CONFIG
 
     reference_mesh, reference_solution = create_reference_solution(
-        mesh_size_factor=MESH_CONFIG["reference_mesh_factor"]
+        problem, mesh_size_factor=MESH_CONFIG["reference_mesh_factor"]
     )
 
     # Initial setup
     mesh_point_count_0, vertex_coordinates_0 = get_initial_mesh_data(mesh)
-    gfu, fes = solve_FEM(mesh)
+    gfu, fes = solve_FEM(mesh, problem=problem)
     vertex_array = export_vertex_coordinates(mesh)
-    solution_array = export_fem_solution(mesh, gfu)
+    solution_array = export_fem_solution(mesh, gfu, problem=problem)
     mesh_x, mesh_y = vertex_array.T
 
     print(f"Initial mesh: {len(mesh_x):,} points")
@@ -88,7 +118,7 @@ def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images
     dataset = create_dataset(vertex_array, solution_array)
 
     # Initialize model
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y).to(DEVICE)
+    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
     model.mesh_point_history = [vertex_coordinates_0]
     model.mesh_point_count_history = [mesh_point_count_0]
 
@@ -131,6 +161,7 @@ def run_adaptive_training(mesh, num_adaptations=None, epochs=None, export_images
 
 
 def run_adaptive_training_fair(
+    problem,
     initial_mesh,
     shared_dataset,
     reference_mesh,
@@ -138,6 +169,8 @@ def run_adaptive_training_fair(
     num_adaptations,
     epochs,
     export_images,
+    initial_state_dict=None,
+    method_seed=None,
 ):
     """
     Run adaptive mesh training using shared components for fair comparison.
@@ -154,12 +187,12 @@ def run_adaptive_training_fair(
     Returns:
         FeedForward: Trained adaptive PINN model
     """
-    from pinn_model import FeedForward
     from mesh_refinement import adapt_mesh_and_train
-    from config import DEVICE
 
     print("Starting adaptive training on device:", DEVICE)
     print(f"Configuration: {num_adaptations} iterations, {epochs} epochs per iteration")
+    if method_seed is not None:
+        set_global_seed(method_seed)
 
     # Get initial mesh coordinates
     vertex_array = export_vertex_coordinates(initial_mesh)
@@ -168,7 +201,9 @@ def run_adaptive_training_fair(
     print(f"Initial mesh: {len(mesh_x):,} points")
 
     # Initialize model with shared training data coordinates
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y).to(DEVICE)
+    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    if initial_state_dict is not None:
+        model.load_state_dict(copy.deepcopy(initial_state_dict))
 
     # Store reference solution in model for consistent error assessment
     model.reference_mesh = reference_mesh
@@ -198,19 +233,12 @@ def run_adaptive_training_fair(
             reference_mesh,
             reference_solution,
             epochs,
-            export_images=True,
-            iteration=iteration,  # Always export for GIF
+            export_images=export_images,
+            iteration=iteration,
         )
-
-        # Update tracking
-        vertex_array = export_vertex_coordinates(current_mesh)
-        mesh_x, mesh_y = vertex_array.T
         print(
-            f"Iteration {iteration + 1} completed. Current mesh: {len(mesh_x):,} points"
+            f"Iteration {iteration + 1} completed. Current mesh: {len(model.mesh_x):,} points"
         )
-
-        model.mesh_point_history.append(vertex_array.clone())
-        model.mesh_point_count_history.append(len(mesh_x))
 
     print(f"\n{'='*60}")
     print("ADAPTIVE TRAINING COMPLETED")
@@ -220,6 +248,7 @@ def run_adaptive_training_fair(
 
 
 def run_random_training_fair(
+    problem,
     initial_mesh,
     shared_dataset,
     reference_mesh,
@@ -228,138 +257,26 @@ def run_random_training_fair(
     epochs,
     export_images,
     adaptive_model=None,
+    initial_state_dict=None,
+    method_seed=None,
 ):
-    """
-    Run random point training using shared components for fair comparison.
-
-    Args:
-        initial_mesh: Initial mesh object (for domain bounds)
-        shared_dataset: Shared training dataset (same as adaptive method)
-        reference_mesh: High-fidelity reference mesh for error assessment
-        reference_solution: High-fidelity reference solution for error assessment
-        num_adaptations: Number of training iterations to match adaptive method
-        epochs: Number of training epochs per iteration
-        export_images: Whether to export visualization images
-        adaptive_model: Trained adaptive model to match point progression (optional)
-
-    Returns:
-        FeedForward: Trained random point PINN model
-    """
-    from pinn_model import FeedForward
-    from training import train_model
-    from mesh_refinement import compute_model_error
-    from geometry import get_random_points, create_initial_mesh
-    from config import DEVICE
-
-    print(f"\n{'='*60}")
-    print("RANDOM POINT TRAINING COMPARISON")
-    print(f"{'='*60}")
-    print("Training strategy: Shared initial data + random residual points")
-    print("Error assessment: Same reference solution as adaptive method")
-
-    # Get TRUE initial mesh size (75 points) - create fresh mesh to avoid modified mesh
-    fresh_initial_mesh = create_initial_mesh(maxh=0.7)  # Use same size as experiment
-    vertex_array = export_vertex_coordinates(fresh_initial_mesh)
-    mesh_x, mesh_y = vertex_array.T
-    initial_point_count = len(mesh_x)
-
-    print(
-        f"Random model starting with TRUE initial count: {initial_point_count:,} points"
+    reference_point_counts = None
+    if adaptive_model is not None:
+        reference_point_counts = adaptive_model.mesh_point_count_history
+    return run_method_training_fair(
+        method_name="random",
+        problem=problem,
+        initial_mesh=initial_mesh,
+        shared_dataset=shared_dataset,
+        reference_mesh=reference_mesh,
+        reference_solution=reference_solution,
+        num_adaptations=num_adaptations,
+        epochs=epochs,
+        export_images=export_images,
+        reference_point_counts=reference_point_counts,
+        initial_state_dict=initial_state_dict,
+        method_seed=method_seed,
     )
-
-    # Initialize model with true initial coordinates (for fair comparison)
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y).to(DEVICE)
-
-    # Store reference solution for consistent error assessment
-    model.reference_mesh = reference_mesh
-    model.reference_solution = reference_solution
-
-    # Initialize tracking with true initial count
-    model.mesh_point_count_history = [initial_point_count]
-    model.total_error_history = []
-    model.boundary_error_history = []
-
-    # Training iterations matching adaptive method's progression
-    for iteration in range(num_adaptations):
-        print(f"\nRandom training iteration: {iteration + 1}/{num_adaptations}")
-
-        # Use adaptive model's point count at the same iteration index if available
-        if adaptive_model:
-            if iteration < len(adaptive_model.mesh_point_count_history):
-                target_point_count = adaptive_model.mesh_point_count_history[iteration]
-                print(
-                    f"Matching adaptive (same-iteration index {iteration}): using {target_point_count:,} points"
-                )
-            else:
-                # Fallback: use the last available count
-                target_point_count = adaptive_model.mesh_point_count_history[-1]
-                print(f"Using final adaptive point count: {target_point_count} points")
-        else:
-            # Fallback: use fixed progression
-            if iteration == 0:
-                target_point_count = int(initial_point_count * 1.2)  # First refinement
-            else:
-                target_point_count = int(initial_point_count * (1.2 ** (iteration + 1)))
-            print(f"Using estimated progression: {target_point_count:,} points")
-
-        # Update model's residual computation points to random locations
-        random_x, random_y = get_random_points(
-            mesh=initial_mesh, random_point_count=target_point_count
-        )
-        # Ensure strict truncation in case of any oversampling
-        if len(random_x) > target_point_count:
-            random_x = random_x[:target_point_count]
-            random_y = random_y[:target_point_count]
-
-        model.mesh_x = torch.tensor(random_x).to(DEVICE)
-        model.mesh_y = torch.tensor(random_y).to(DEVICE)
-
-        print(f"Using {target_point_count:,} random points for residual computation")
-
-        # Train model (uses shared_dataset for data loss, random points for residual loss)
-        train_model(model, shared_dataset, epochs, lr=TRAINING_CONFIG["lr"])
-
-        # Compute and export random residuals if requested
-        if export_images:
-            from mesh_refinement import compute_random_residuals
-            from fem_solver import solve_FEM
-
-            gfu, fes = solve_FEM(initial_mesh)  # Get finite element space
-            compute_random_residuals(
-                model, initial_mesh, fes, export_images=True, iteration=iteration
-            )
-
-        # Error assessment using same reference solution as adaptive method
-        # Use specialized random error function that creates random_errors_*.png files
-        if export_images:
-            from mesh_refinement import compute_random_model_error
-
-            compute_random_model_error(
-                model,
-                reference_mesh,
-                reference_solution,
-                export_images=True,
-                iteration=iteration,
-            )
-        else:
-            # Use regular error computation without images
-            compute_model_error(
-                model,
-                reference_mesh,
-                reference_solution,
-                export_images=False,
-                iteration=iteration,
-            )
-
-        # Record the actual count achieved (may be < target if rejection sampling underfills)
-        try:
-            actual_count = len(model.mesh_x)
-        except Exception:
-            actual_count = target_point_count
-        model.mesh_point_count_history.append(actual_count)
-
-    print("Random training comparison completed")
-    return model
 
 
 def run_random_comparison(model, mesh, num_adaptations=None, epochs=None):
@@ -384,7 +301,8 @@ def run_random_comparison(model, mesh, num_adaptations=None, epochs=None):
     print(f"{'='*60}")
 
     # Get the final FEM solution for comparison
-    gfu, fes = solve_FEM(mesh)
+    problem = getattr(model, "problem", _build_problem())
+    gfu, fes = solve_FEM(mesh, problem=problem)
 
     # Initialize random model with same number of points as initial adaptive model
     initial_point_count = (
@@ -393,7 +311,9 @@ def run_random_comparison(model, mesh, num_adaptations=None, epochs=None):
     rand_x, rand_y = get_random_points(
         mesh=mesh, random_point_count=initial_point_count
     )
-    rand_model = FeedForward(torch.tensor(rand_x), torch.tensor(rand_y))
+    rand_model = FeedForward(torch.tensor(rand_x), torch.tensor(rand_y), problem).to(
+        DEVICE
+    )
 
     print(f"Random model initialized with {initial_point_count:,} random points")
 
@@ -436,6 +356,7 @@ def run_random_comparison(model, mesh, num_adaptations=None, epochs=None):
 
 def run_method_training_fair(
     method_name: str,
+    problem,
     initial_mesh,
     shared_dataset,
     reference_mesh,
@@ -444,6 +365,8 @@ def run_method_training_fair(
     epochs: int,
     export_images: bool,
     reference_point_counts: list = None,
+    initial_state_dict=None,
+    method_seed=None,
 ):
     """
     Run training with any registered sampling method using shared components for fair comparison.
@@ -465,44 +388,53 @@ def run_method_training_fair(
     Returns:
         FeedForward: Trained PINN model
     """
-    from mesh_refinement import compute_model_error
-    from config import DEVICE, RAD_CONFIG, RANDOM_R_CONFIG, QUASI_RANDOM_CONFIG
+    from mesh_refinement import (
+        compute_model_error,
+        compute_random_model_error,
+        compute_random_residuals,
+    )
+    from config import DEVICE, QUASI_RANDOM_CONFIG, RAD_CONFIG, RANDOM_R_CONFIG
 
     print(f"\n{'='*60}")
     print(f"METHOD TRAINING: {method_name.upper()}")
     print(f"{'='*60}")
+    if method_seed is not None:
+        set_global_seed(method_seed)
 
     # Get method instance with appropriate config
-    domain_min = 0.0
-    domain_max = 5.0  # From GEOMETRY_CONFIG["domain_size"]
+    domain_bounds = problem.get_sampling_bounds()
 
     if method_name == "rad":
         method = get_method(
             method_name,
-            domain_bounds=(domain_min, domain_max),
+            domain_bounds=domain_bounds,
             k=RAD_CONFIG["k"],
             c=RAD_CONFIG["c"],
             num_candidates=RAD_CONFIG["num_candidates"],
             resample_period=RAD_CONFIG["resample_period"],
+            seed=method_seed,
         )
     elif method_name == "random_r":
         method = get_method(
             method_name,
-            domain_bounds=(domain_min, domain_max),
+            domain_bounds=domain_bounds,
             resample_period=RANDOM_R_CONFIG["resample_period"],
+            seed=method_seed,
         )
     elif method_name in ("halton", "sobol"):
         method = get_method(
             method_name,
-            domain_bounds=(domain_min, domain_max),
-            seed=QUASI_RANDOM_CONFIG["seed"],
+            domain_bounds=domain_bounds,
+            seed=method_seed if method_seed is not None else QUASI_RANDOM_CONFIG["seed"],
         )
     else:
         # Fallback for other methods
         try:
-            method = get_method(method_name, domain_bounds=(domain_min, domain_max))
+            method = get_method(method_name, domain_bounds=domain_bounds)
         except TypeError:
             method = get_method(method_name)
+    if hasattr(method, "set_problem"):
+        method.set_problem(problem)
 
     print(f"Method: {method.name} - {method.description}")
 
@@ -514,7 +446,9 @@ def run_method_training_fair(
     print(f"Initial mesh: {initial_point_count:,} points")
 
     # Initialize model
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y).to(DEVICE)
+    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    if initial_state_dict is not None:
+        model.load_state_dict(copy.deepcopy(initial_state_dict))
     model.reference_mesh = reference_mesh
     model.reference_solution = reference_solution
 
@@ -523,6 +457,9 @@ def run_method_training_fair(
     model.mesh_point_count_history = [initial_point_count]
     model.total_error_history = []
     model.boundary_error_history = []
+    random_fe_space = None
+    if method_name == "random":
+        random_fe_space = H1(initial_mesh, order=1, dirichlet=".*")
 
     # Training iterations
     for iteration in range(num_adaptations):
@@ -552,16 +489,47 @@ def run_method_training_fair(
         print(f"Using {actual_count:,} {method_name} points for residual computation")
 
         # Train model
-        train_model(model, shared_dataset, epochs, lr=TRAINING_CONFIG["lr"])
+        train_model(
+            model,
+            shared_dataset,
+            epochs,
+            optimizer=TRAINING_CONFIG["optimizer"],
+            lr=TRAINING_CONFIG["lr"],
+        )
 
         # Compute and record error
-        compute_model_error(
-            model,
-            reference_mesh,
-            reference_solution,
-            export_images=export_images,
-            iteration=iteration,
-        )
+        if method_name == "random":
+            compute_random_residuals(
+                model,
+                initial_mesh,
+                random_fe_space,
+                export_images=export_images,
+                iteration=iteration,
+            )
+            if export_images:
+                compute_random_model_error(
+                    model,
+                    reference_mesh,
+                    reference_solution,
+                    export_images=True,
+                    iteration=iteration,
+                )
+            else:
+                compute_model_error(
+                    model,
+                    reference_mesh,
+                    reference_solution,
+                    export_images=False,
+                    iteration=iteration,
+                )
+        else:
+            compute_model_error(
+                model,
+                reference_mesh,
+                reference_solution,
+                export_images=export_images,
+                iteration=iteration,
+            )
 
         # Record point count
         model.mesh_point_count_history.append(actual_count)
@@ -578,6 +546,10 @@ def run_complete_experiment(
     create_gifs=True,
     generate_report=True,
     methods_to_run=None,
+    problem_name: str = "poisson",
+    problem_kwargs: dict | None = None,
+    reference_mesh_factor: float | None = None,
+    seed: int | None = None,
 ):
     """Run the complete PINN adaptive mesh experiment.
 
@@ -594,8 +566,6 @@ def run_complete_experiment(
         dict: Dictionary of trained models keyed by method name
     """
     if mesh_size is None:
-        from config import MESH_CONFIG
-
         mesh_size = MESH_CONFIG["maxh"]
     if num_adaptations is None:
         num_adaptations = TRAINING_CONFIG["iterations"]
@@ -605,6 +575,17 @@ def run_complete_experiment(
         methods_to_run = ["adaptive", "random"]  # Default to current methods
     if epochs is None:
         epochs = TRAINING_CONFIG["epochs"]
+    problem = _build_problem(problem_name, problem_kwargs)
+    if reference_mesh_factor is None:
+        reference_mesh_factor = MESH_CONFIG["reference_mesh_factor"]
+    if seed is None:
+        cfg_seed = TRAINING_CONFIG.get("seed")
+        if cfg_seed is not None:
+            seed = int(cfg_seed)
+        else:
+            seed = int(torch.initial_seed() % (2**31 - 1))
+    else:
+        seed = int(seed)
 
     print(f"\n{'='*80}")
     print("STARTING COMPLETE PINN ADAPTIVE MESH EXPERIMENT")
@@ -614,6 +595,8 @@ def run_complete_experiment(
     print(f"Epochs per iteration: {epochs}")
     print(f"Export images: {export_images}")
     print(f"Methods to test: {', '.join(methods_to_run)}")
+    print(f"Problem: {problem.name}")
+    print(f"Base seed: {seed}")
     print(f"Device: {DEVICE}")
 
     # Create shared components for fair comparison
@@ -623,21 +606,21 @@ def run_complete_experiment(
 
     # 1. Create initial mesh and training dataset (shared by both methods)
     print("Creating initial mesh and training dataset...")
-    initial_mesh = create_initial_mesh(maxh=mesh_size)
-    gfu, fes = solve_FEM(initial_mesh)
+    initial_mesh = problem.create_mesh(maxh=mesh_size)
+    gfu, fes = solve_FEM(initial_mesh, problem=problem)
     vertex_array = export_vertex_coordinates(initial_mesh)
-    solution_array = export_fem_solution(initial_mesh, gfu)
+    solution_array = export_fem_solution(initial_mesh, gfu, problem=problem)
     shared_training_dataset = create_dataset(vertex_array, solution_array)
     mesh_x, mesh_y = vertex_array.T
     print(f"Shared training dataset: {len(mesh_x):,} points")
+    initial_model_state = _build_initial_model_state(problem, vertex_array, seed)
 
     # 2. Create high-fidelity reference solution (shared by both methods)
     print("Creating high-fidelity reference solution...")
     from mesh_refinement import create_reference_solution
-    from config import MESH_CONFIG
 
     reference_mesh, reference_solution = create_reference_solution(
-        mesh_size_factor=MESH_CONFIG["reference_mesh_factor"]
+        problem, mesh_size_factor=reference_mesh_factor
     )
     ref_vertex_count = len(export_vertex_coordinates(reference_mesh))
     print(f"Reference solution: {ref_vertex_count:,} points")
@@ -645,23 +628,33 @@ def run_complete_experiment(
 
     # Dictionary to store all trained models
     trained_models = {}
+    execution_order = list(methods_to_run)
+    if "adaptive" in execution_order:
+        execution_order = ["adaptive"] + [
+            method for method in execution_order if method != "adaptive"
+        ]
 
     # Run each requested method with shared components
-    for method in methods_to_run:
+    for method in execution_order:
         print(f"\n{'='*60}")
         print(f"RUNNING METHOD: {method.upper()}")
         print(f"{'='*60}")
+        method_seed = _method_seed(seed, method)
+        method_mesh = _clone_mesh(initial_mesh)
 
         if method == "adaptive":
             print("Starting adaptive mesh training...")
             model = run_adaptive_training_fair(
-                initial_mesh,
+                problem,
+                method_mesh,
                 shared_training_dataset,
                 reference_mesh,
                 reference_solution,
                 num_adaptations,
                 epochs,
                 export_images,
+                initial_state_dict=initial_model_state,
+                method_seed=method_seed,
             )
             trained_models["adaptive"] = model
 
@@ -673,7 +666,8 @@ def run_complete_experiment(
 
             print("Starting random point training...")
             model = run_random_training_fair(
-                initial_mesh,
+                problem,
+                method_mesh,
                 shared_training_dataset,
                 reference_mesh,
                 reference_solution,
@@ -681,6 +675,8 @@ def run_complete_experiment(
                 epochs,
                 export_images,
                 adaptive_model=trained_models.get("adaptive"),
+                initial_state_dict=initial_model_state,
+                method_seed=method_seed,
             )
             trained_models["random"] = model
 
@@ -694,7 +690,8 @@ def run_complete_experiment(
             print(f"Starting {method} training...")
             model = run_method_training_fair(
                 method_name=method,
-                initial_mesh=initial_mesh,
+                problem=problem,
+                initial_mesh=method_mesh,
                 shared_dataset=shared_training_dataset,
                 reference_mesh=reference_mesh,
                 reference_solution=reference_solution,
@@ -702,6 +699,8 @@ def run_complete_experiment(
                 epochs=epochs,
                 export_images=export_images,
                 reference_point_counts=reference_counts,
+                initial_state_dict=initial_model_state,
+                method_seed=method_seed,
             )
             trained_models[method] = model
 
@@ -779,7 +778,12 @@ def write_multi_method_histories_csv(trained_models: dict):
         boundary_errors = getattr(model, "boundary_error_history", [])
         point_counts = getattr(model, "mesh_point_count_history", [])
 
-        for i in range(max(len(total_errors), len(point_counts))):
+        if total_errors:
+            num_rows = len(total_errors)
+        else:
+            num_rows = max(len(point_counts) - 1, 0)
+
+        for i in range(num_rows):
             rows.append(
                 {
                     "method": method_name,
@@ -865,6 +869,7 @@ def run_parameter_study(mesh_sizes=None, num_adaptations_list=None, epochs_list=
                         export_images=False,
                         create_gifs=False,
                         generate_report=False,
+                        seed=TRAINING_CONFIG.get("seed"),
                     )
 
                     adaptive_model = (
@@ -1038,6 +1043,7 @@ def run_hyperparameter_study(
                 export_images=export_images,
                 create_gifs=False,
                 generate_report=False,
+                seed=seed,
             )
 
             adaptive_model = (

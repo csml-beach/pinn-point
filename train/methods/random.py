@@ -22,7 +22,9 @@ class RandomMethod(TrainingMethod):
     name = "random"
     description = "Uniform random point sampling (baseline)"
 
-    def __init__(self, domain_bounds: Tuple[float, float] = (0.0, 5.0)):
+    def __init__(
+        self, domain_bounds: Tuple[float, float, float, float] = (0.0, 5.0, 0.0, 5.0)
+    ):
         """Initialize random method.
 
         Args:
@@ -51,7 +53,7 @@ class RandomMethod(TrainingMethod):
         if num_points is None:
             num_points = len(mesh.vertices)
 
-        domain_min, domain_max = self.domain_bounds
+        x_min, x_max, y_min, y_max = self.domain_bounds
 
         # Generate random points, rejecting those outside the domain
         random_points = []
@@ -59,8 +61,8 @@ class RandomMethod(TrainingMethod):
         attempts = 0
 
         while len(random_points) < num_points and attempts < max_attempts:
-            x = np.random.uniform(domain_min, domain_max)
-            y = np.random.uniform(domain_min, domain_max)
+            x = np.random.uniform(x_min, x_max)
+            y = np.random.uniform(y_min, y_max)
 
             # Check if point is inside mesh domain
             try:

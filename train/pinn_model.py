@@ -3,10 +3,10 @@ PINN neural network model implementation.
 Contains the FeedForward neural network class for Physics-Informed Neural Networks.
 """
 
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import matplotlib.pyplot as plt
 from matplotlib.markers import MarkerStyle
 from config import DEVICE, MODEL_CONFIG
 
@@ -14,12 +14,13 @@ from config import DEVICE, MODEL_CONFIG
 class FeedForward(nn.Module):
     """Physics-Informed Neural Network for solving PDEs with adaptive mesh refinement."""
 
-    def __init__(self, mesh_x, mesh_y):
+    def __init__(self, mesh_x, mesh_y, problem):
         """Initialize the PINN model.
 
         Args:
             mesh_x: x-coordinates of mesh points
             mesh_y: y-coordinates of mesh points
+            problem: PDEProblem driving residual and boundary losses
         """
         super(FeedForward, self).__init__()
 
@@ -35,6 +36,7 @@ class FeedForward(nn.Module):
         # Training components
         self.optimizer = None
         self.fes = None  # Will be set during training
+        self.problem = problem
 
         # Loss function weights
         self.w_data = MODEL_CONFIG["w_data"]
@@ -117,24 +119,15 @@ class FeedForward(nn.Module):
         Returns:
             PDE residual values
         """
+        if self.problem is None:
+            raise RuntimeError("FeedForward model requires an attached PDE problem")
+
         if use_meshgrid:
-            X, Y = torch.meshgrid(x, y)
-            xy = torch.stack((X.flatten(), Y.flatten()), dim=1)
+            x, y = torch.meshgrid(x, y, indexing="ij")
+            x = x.flatten()
+            y = y.flatten()
 
-        x = torch.tensor(x, dtype=torch.float32).to(DEVICE)
-        y = torch.tensor(y, dtype=torch.float32).to(DEVICE)
-        x.requires_grad = True
-        y.requires_grad = True
-
-        u = self.forward(x, y)
-
-        # Compute second derivatives
-        d2u_dx2 = self.compute_derivative(u, x, 2)
-        d2u_dy2 = self.compute_derivative(u, y, 2)
-
-        # PDE: ∇²u + f = 0, where f = x*y
-        residual = d2u_dx2 + d2u_dy2 + x * y
-        return residual
+        return self.problem.pde_residual(self, x, y)
 
     def loss_data(self, dataset):
         """Compute data loss using the provided dataset.
@@ -179,14 +172,9 @@ class FeedForward(nn.Module):
         Returns:
             Boundary condition loss value
         """
-        self.x_bottom = torch.linspace(0, 5, self.num_bd).reshape(-1)
-        self.y_bottom = torch.zeros(1, self.num_bd).reshape(-1)
-
-        bc_pred_bottom = self.forward(
-            self.x_bottom.to(DEVICE), self.y_bottom.to(DEVICE)
-        )
-        loss_bc_bottom = torch.mean(torch.square(bc_pred_bottom))
-        return loss_bc_bottom
+        if self.problem is None:
+            raise RuntimeError("FeedForward model requires an attached PDE problem")
+        return self.problem.boundary_loss(self, self.num_bd)
 
     def compute_losses(self, dataset):
         """Compute all loss components.

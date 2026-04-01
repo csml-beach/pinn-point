@@ -1,0 +1,13 @@
+\section{Introduction}
+
+Physics-informed neural networks (PINNs) are often sensitive to how collocation points are chosen during training. PINN-Point is organized around that question: it compares adaptive mesh refinement against random, quasi-random, and residual-resampling strategies on a Poisson problem defined over a nontrivial two-dimensional geometry.
+
+This starter draft is intentionally conservative. It provides a manuscript structure that matches the repository, but it should not overclaim until the final experiment set, metrics, and citations are locked.
+
+\paragraph{Planned discussion points.}
+\begin{itemize}
+    \item Why collocation-point placement matters for PINN accuracy and training efficiency.
+    \item Why complex geometries make mesh-aware strategies attractive relative to purely meshless baselines.
+    \item How this repository enforces a fair comparison through shared FEM-derived supervision.
+    \item Which related-work thread should frame the paper: adaptive sampling, mesh refinement, or complex-geometry PINNs.
+\end{itemize}

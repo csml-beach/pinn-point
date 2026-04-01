@@ -9,14 +9,12 @@ For new PDEs, use the extensible problems module:
 """
 
 import torch
-import numpy as np
 from torch.utils.data import TensorDataset
-from netgen.geom2d import unit_square
 from ngsolve import *
 from geometry import export_vertex_coordinates
 
 
-def solve_FEM(mesh):
+def solve_FEM(mesh, problem=None):
     """Solve the Poisson equation on the given mesh.
 
     Solves: -∇²u = f(x,y) with f(x,y) = x*y
@@ -33,6 +31,9 @@ def solve_FEM(mesh):
     Returns:
         tuple: (gfu, fes) - GridFunction solution and finite element space
     """
+    if problem is not None:
+        return problem.solve_fem(mesh)
+
     # H1-conforming finite element space
     fes = H1(mesh, order=1, dirichlet="bottom", autoupdate=True)
 
@@ -59,7 +60,7 @@ def solve_FEM(mesh):
     return gfu, fes
 
 
-def export_fem_solution(mesh, gfu):
+def export_fem_solution(mesh, gfu, problem=None):
     """Export FEM solution values at mesh vertices.
 
     Args:
@@ -69,10 +70,9 @@ def export_fem_solution(mesh, gfu):
     Returns:
         torch.Tensor: Solution values at mesh vertices
     """
-    vertex_array = export_vertex_coordinates(mesh).to(torch.float32)
-    mesh_x, mesh_y = vertex_array.T
-    solution_array = torch.tensor([x for x in gfu.vec])
-    return solution_array
+    if problem is not None:
+        return problem.export_fem_solution(mesh, gfu)
+    return torch.tensor([x for x in gfu.vec], dtype=torch.float32)
 
 
 def create_dataset(vertex_array, solution_array):

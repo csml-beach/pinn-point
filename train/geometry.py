@@ -33,31 +33,56 @@ def create_complex_geometry():
     Returns:
         Complex geometry object with named boundaries
     """
-    base = create_base_shape(
-        length=GEOMETRY_CONFIG["base_l"], width=GEOMETRY_CONFIG["base_w"]
-    )
+    domain_size = GEOMETRY_CONFIG["domain_size"]
+    base_l = GEOMETRY_CONFIG["base_l"]
+    base_w = GEOMETRY_CONFIG["base_w"]
     offset = GEOMETRY_CONFIG["offset"]
+    grid_n = GEOMETRY_CONFIG.get("grid_n", 3)
+    pattern_scale = GEOMETRY_CONFIG.get("pattern_scale", "auto")
+    cell_fill = GEOMETRY_CONFIG.get("cell_fill", 0.8)
+    circle_radius_cfg = GEOMETRY_CONFIG.get("circle_radius", 1.0)
+
+    if offset == "auto" or offset is None:
+        cell = domain_size / max(grid_n, 1)
+        offset = cell
+        origin = cell / 2.0
+        offset_was_auto = True
+    else:
+        span = (grid_n - 1) * offset if grid_n > 1 else 0.0
+        origin = max((domain_size - span) / 2.0, 0.0)
+        offset_was_auto = False
+
+    base_half = max(base_l, base_w) / 2.0
+    size_ref = max(base_half, circle_radius_cfg)
+    if pattern_scale == "auto":
+        if offset_was_auto:
+            max_half = (offset * cell_fill) / 2.0
+        else:
+            max_half = origin
+        pattern_scale = max_half / size_ref if size_ref > 0 else 1.0
+
+    base = create_base_shape(
+        length=base_l * pattern_scale, width=base_w * pattern_scale
+    )
+    circle_radius = circle_radius_cfg * pattern_scale
     figure = base
 
-    for i in range(3):
-        for j in range(3):
+    for i in range(grid_n):
+        for j in range(grid_n):
+            x_pos = origin + i * offset
+            y_pos = origin + j * offset
             if (i + j) % 2 == 0:
-                figure += create_base_shape(i, j).Move((i * offset, j * offset, 0))
+                figure += base.Move((x_pos, y_pos, 0))
             else:
-                if i + j == 1:
-                    figure += (
-                        WorkPlane().Circle(1).Face().Move((i * offset, j * offset, 0))
-                    )
-                else:
-                    figure += base.Mirror(Axis((0, 0, 0), (0, 1, 0))).Move(
-                        (i * offset, j * offset, 0)
-                    )
+                figure += (
+                    WorkPlane()
+                    .Circle(circle_radius)
+                    .Face()
+                    .Move((x_pos, y_pos, 0))
+                )
 
     # Create the main geometry by subtracting the figure from a rectangle
-    domain_size = GEOMETRY_CONFIG["domain_size"]
-    geo = WorkPlane().Rectangle(domain_size, domain_size).Face() - figure.Move(
-        (-2, -2, 0)
-    )
+    geo = WorkPlane().Rectangle(domain_size, domain_size).Face() - figure
 
     # Name the boundaries
     geo.edges.Min(Y).name = "bottom"

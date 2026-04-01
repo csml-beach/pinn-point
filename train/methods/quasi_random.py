@@ -29,7 +29,11 @@ class QuasiRandomMethod(TrainingMethod):
     name = "quasi_random"
     description = "Base quasi-random sampling"
 
-    def __init__(self, domain_bounds: Tuple[float, float] = (0.0, 5.0), seed: int = 42):
+    def __init__(
+        self,
+        domain_bounds: Tuple[float, float, float, float] = (0.0, 5.0, 0.0, 5.0),
+        seed: int = 42,
+    ):
         """Initialize quasi-random method.
 
         Args:
@@ -58,8 +62,9 @@ class QuasiRandomMethod(TrainingMethod):
         if not HAS_QMC:
             raise ImportError("scipy.stats.qmc required for quasi-random sampling")
 
-        domain_min, domain_max = self.domain_bounds
-        domain_range = domain_max - domain_min
+        x_min, x_max, y_min, y_max = self.domain_bounds
+        x_range = x_max - x_min
+        y_range = y_max - y_min
 
         valid_points = []
         batch_size = num_points * 4  # Oversample to account for rejection
@@ -73,7 +78,9 @@ class QuasiRandomMethod(TrainingMethod):
 
             # Generate points in [0, 1]^2, then scale to domain
             unit_points = sampler.random(batch_size)
-            scaled_points = unit_points * domain_range + domain_min
+            scaled_points = np.empty_like(unit_points)
+            scaled_points[:, 0] = unit_points[:, 0] * x_range + x_min
+            scaled_points[:, 1] = unit_points[:, 1] * y_range + y_min
 
             # Rejection sampling: keep only points inside mesh
             for x, y in scaled_points:
