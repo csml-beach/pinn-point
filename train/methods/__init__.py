@@ -27,6 +27,7 @@ Example:
 
 from .base import TrainingMethod
 from .adaptive import AdaptiveMethod
+from .hybrid_anchor import AdaptiveHybridAnchorMethod
 from .random import RandomMethod
 from .quasi_random import HaltonMethod, SobolMethod
 from .random_r import RandomResamplingMethod
@@ -35,6 +36,7 @@ from .rad import RADMethod
 # Registry of available methods for CLI/config selection
 METHOD_REGISTRY = {
     "adaptive": AdaptiveMethod,
+    "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,
     "halton": HaltonMethod,
     "sobol": SobolMethod,

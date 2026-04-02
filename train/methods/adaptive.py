@@ -6,9 +6,8 @@ concentrating collocation points in regions with high residual.
 """
 
 import torch
-import numpy as np
 from typing import Tuple, Optional, Any
-from ngsolve import GridFunction, BaseVector, Integrate, VOL, H1
+from ngsolve import GridFunction, BaseVector, Integrate, VOL, BND, H1
 from .base import TrainingMethod
 from config import DEVICE
 
@@ -31,6 +30,22 @@ class AdaptiveMethod(TrainingMethod):
                                   (elements with error > threshold * max_error are refined)
         """
         self.refinement_threshold = refinement_threshold
+
+    def _compute_residual_indicators(
+        self, mesh: Any, model: Any
+    ) -> tuple[Any, Any, object, float, float]:
+        """Build the residual field and elementwise indicators on the current mesh."""
+        res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().cpu().numpy()
+
+        fe_space = H1(mesh, order=1, dirichlet=".*")
+        residuals = GridFunction(fe_space)
+        residuals.vec[:] = BaseVector(res.flatten())
+        residuals = residuals * residuals
+
+        eta2 = Integrate(residuals, mesh, VOL, element_wise=True)
+        total_residual = float(Integrate(residuals, mesh, VOL))
+        boundary_residual = float(Integrate(residuals, mesh, BND))
+        return fe_space, residuals, eta2, total_residual, boundary_residual
 
     def get_collocation_points(
         self, mesh: Any, model: Optional[Any] = None, iteration: int = 0
@@ -71,40 +86,27 @@ class AdaptiveMethod(TrainingMethod):
         Returns:
             Tuple of (refined_mesh, was_refined)
         """
-        from geometry import export_vertex_coordinates
-
-        # Get current mesh coordinates
-        mesh_coords = export_vertex_coordinates(mesh)
-        mesh_x, mesh_y = mesh_coords.unbind(1)
-
-        # Compute PDE residuals at mesh points
-        res = (
-            model.PDE_residual(mesh_x.to(DEVICE), mesh_y.to(DEVICE))
-            .detach()
-            .cpu()
-            .numpy()
+        _, _, eta2, total_residual, boundary_residual = self._compute_residual_indicators(
+            mesh, model
         )
 
-        # Create FE space for residual interpolation
-        fe_space = H1(mesh, order=1, dirichlet=".*")
-
-        # Create GridFunction with squared residuals
-        residuals = GridFunction(fe_space)
-        residuals.vec[:] = BaseVector(res.flatten())
-        residuals = residuals * residuals  # Square the residuals
-
-        # Compute element-wise error indicators
-        eta2 = Integrate(residuals, mesh, VOL, element_wise=True)
+        if not hasattr(model, "total_residual_history"):
+            model.total_residual_history = []
+        if not hasattr(model, "boundary_residual_history"):
+            model.boundary_residual_history = []
+        model.total_residual_history.append(total_residual)
+        model.boundary_residual_history.append(boundary_residual)
 
         # Mark elements for refinement
-        maxerr = max(eta2)
-        if maxerr > 0:
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = (
-                eta2.NumPy() > self.refinement_threshold * maxerr
-            )
+        eta2_np = eta2.NumPy()
+        maxerr = float(max(eta2)) if len(eta2_np) else 0.0
+        if maxerr > 0.0:
+            refine_mask = eta2_np > self.refinement_threshold * maxerr
+            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
-            was_refined = True
+            was_refined = bool(refine_mask.any())
         else:
+            mesh.ngmesh.Elements2D().NumPy()["refine"] = eta2_np > 0.0
             was_refined = False
 
         return mesh, was_refined
@@ -143,7 +145,7 @@ class AdaptiveMethod(TrainingMethod):
                 {
                     "max_residual": float(res.abs().max()),
                     "mean_residual": float(res.abs().mean()),
-                    "num_elements": len(list(mesh.Elements2D())),
+                    "num_elements": int(getattr(mesh, "ne", 0)),
                 }
             )
         except Exception:

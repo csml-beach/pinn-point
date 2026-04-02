@@ -60,6 +60,14 @@ class TrainingMethod(ABC):
         """
         return mesh, False
 
+    def set_problem(self, problem: Any) -> None:
+        """Attach the active PDE problem when a method needs it."""
+        self.problem = problem
+
+    def initialize_run_state(self, **kwargs) -> None:
+        """Optional hook for per-run method setup."""
+        return None
+
     def should_refine(self, iteration: int, max_iterations: int) -> bool:
         """Check if refinement should happen at this iteration.
 

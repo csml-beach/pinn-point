@@ -6,7 +6,7 @@
 
 **PINN-Point** is a research project comparing Physics-Informed Neural Networks (PINNs) trained with:
 - **Adaptive mesh refinement** — concentrates collocation points in high-residual regions
-- **Baseline and competitive samplers** — including random, low-discrepancy, and residual-based fixed-mesh methods
+- **Baseline and competitive samplers** — including random, low-discrepancy, residual-based fixed-mesh methods, and a hybrid anchor-guided adaptive method
 
 The core experiment idea is a **fair comparison**: all methods share the same labeled FEM data, reference solution, initial weights, and point-budget schedule, isolating the effect of collocation point selection and refinement policy. The active comparison policy also uses the same configured training budget per iteration for every method, disables adaptive-only bonus training, and records runtime with method-specific sampling/refinement overhead included.
 
@@ -34,6 +34,7 @@ pinn-point/
 │       ├── __init__.py      # Method registry, get_method()
 │       ├── base.py          # Abstract TrainingMethod class
 │       ├── adaptive.py      # Residual-based adaptive refinement
+│       ├── hybrid_anchor.py # Residual + anchor-error adaptive refinement
 │       ├── random.py        # Uniform random sampling
 │       ├── random_r.py      # Random-R periodic resampling
 │       ├── quasi_random.py  # Halton and Sobol low-discrepancy methods
@@ -68,6 +69,7 @@ pinn-point/
 | `MODEL_CONFIG` | Network architecture, loss weights |
 | `TRAINING_CONFIG` | Epochs, learning rate, iterations |
 | `MESH_CONFIG` | Initial mesh size, refinement threshold |
+| `HYBRID_ADAPTIVE_CONFIG` | Hybrid anchor count, blend weights, normalization quantile |
 | `GEOMETRY_CONFIG` | Domain size, shape parameters |
 | `VIZ_CONFIG` | Image sizes, colormaps |
 

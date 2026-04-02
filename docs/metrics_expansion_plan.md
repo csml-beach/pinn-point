@@ -39,7 +39,7 @@ Before the implementation, `all_methods_histories.csv` stored only:
 - `boundary_error`
 - `point_count`
 
-That is not enough once we add `adaptive_hybrid_anchor`, because we also need the fair fixed-grid metrics and runtime.
+That was not enough for `adaptive_hybrid_anchor`, because we also needed the fair fixed-grid metrics and runtime.
 
 ### 2. Training residual is not a headline comparison metric
 

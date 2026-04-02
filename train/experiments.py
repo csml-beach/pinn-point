@@ -14,9 +14,13 @@ from ngsolve import H1, Mesh
 from config import (
     DEVICE,
     GEOMETRY_CONFIG,
+    HYBRID_ADAPTIVE_CONFIG,
     MESH_CONFIG,
     MODEL_CONFIG,
+    QUASI_RANDOM_CONFIG,
+    RAD_CONFIG,
     RANDOM_CONFIG,
+    RANDOM_R_CONFIG,
     TRAINING_CONFIG,
     VIZ_CONFIG,
 )
@@ -29,6 +33,9 @@ from problems import get_problem
 from training import train_model
 from utils import print_model_summary, set_global_seed
 from visualization import create_multi_method_visualizations
+
+
+MESH_REFINEMENT_METHODS = {"adaptive", "adaptive_hybrid_anchor"}
 
 
 def _build_problem(problem_name: str = "poisson", problem_kwargs: dict | None = None):
@@ -67,8 +74,8 @@ def _record_iteration_runtime(model, runtime_sec: float):
 
 def _log_comparison_budget_policy(epochs: int, methods_to_run: list[str]):
     point_budget_source = (
-        "adaptive iteration-start point counts"
-        if "adaptive" in methods_to_run
+        "mesh-refinement method iteration-start point counts"
+        if any(method in MESH_REFINEMENT_METHODS for method in methods_to_run)
         else "fixed per-method collocation counts"
     )
     print("\nComparison budget policy:")
@@ -80,9 +87,67 @@ def _log_comparison_budget_policy(epochs: int, methods_to_run: list[str]):
     )
 
 
-def run_adaptive_training_fair(
+def _build_method_instance(method_name: str, problem, method_seed: int | None = None):
+    domain_bounds = problem.get_sampling_bounds()
+
+    if method_name == "adaptive":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+        )
+    elif method_name == "adaptive_hybrid_anchor":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            domain_bounds=domain_bounds,
+            anchor_count=HYBRID_ADAPTIVE_CONFIG["anchor_count"],
+            alpha=HYBRID_ADAPTIVE_CONFIG["alpha"],
+            beta=HYBRID_ADAPTIVE_CONFIG["beta"],
+            normalization_quantile=HYBRID_ADAPTIVE_CONFIG["normalization_quantile"],
+            seed=(
+                None
+                if method_seed is None
+                else method_seed + HYBRID_ADAPTIVE_CONFIG["anchor_seed_offset"]
+            ),
+        )
+    elif method_name == "rad":
+        method = get_method(
+            method_name,
+            domain_bounds=domain_bounds,
+            k=RAD_CONFIG["k"],
+            c=RAD_CONFIG["c"],
+            num_candidates=RAD_CONFIG["num_candidates"],
+            resample_period=RAD_CONFIG["resample_period"],
+            seed=method_seed,
+        )
+    elif method_name == "random_r":
+        method = get_method(
+            method_name,
+            domain_bounds=domain_bounds,
+            resample_period=RANDOM_R_CONFIG["resample_period"],
+            seed=method_seed,
+        )
+    elif method_name in ("halton", "sobol"):
+        method = get_method(
+            method_name,
+            domain_bounds=domain_bounds,
+            seed=method_seed if method_seed is not None else QUASI_RANDOM_CONFIG["seed"],
+        )
+    else:
+        try:
+            method = get_method(method_name, domain_bounds=domain_bounds)
+        except TypeError:
+            method = get_method(method_name)
+
+    method.set_problem(problem)
+    return method
+
+
+def run_mesh_refinement_method_training_fair(
+    method_name: str,
     problem,
     initial_mesh,
+    initial_fem_solution,
     shared_dataset,
     reference_mesh,
     reference_solution,
@@ -93,7 +158,7 @@ def run_adaptive_training_fair(
     method_seed=None,
 ):
     """
-    Run adaptive mesh training using shared components for fair comparison.
+    Run a mesh-refining method using shared components for fair comparison.
 
     Args:
         initial_mesh: Initial mesh object
@@ -105,11 +170,18 @@ def run_adaptive_training_fair(
         export_images: Whether to export visualization images
 
     Returns:
-        FeedForward: Trained adaptive PINN model
+        FeedForward: Trained PINN model
     """
-    from mesh_refinement import adapt_mesh_and_train
+    from mesh_refinement import compute_model_error
 
-    print("Starting adaptive training on device:", DEVICE)
+    method = _build_method_instance(method_name, problem, method_seed)
+    method.initialize_run_state(
+        initial_mesh=initial_mesh,
+        fem_solution=initial_fem_solution,
+        method_seed=method_seed,
+    )
+
+    print(f"Starting {method_name} training on device:", DEVICE)
     print(f"Configuration: {num_adaptations} iterations, {epochs} epochs per iteration")
     if method_seed is not None:
         set_global_seed(method_seed)
@@ -142,31 +214,77 @@ def run_adaptive_training_fair(
         print(f"ITERATION {iteration + 1}/{num_adaptations}")
         print(f"{'='*60}")
 
-        print(f"\n--- Adaptation Iteration {iteration + 1} ---")
+        print(f"\n--- {method_name} Iteration {iteration + 1} ---")
         model.iteration_point_count_history.append(len(model.mesh_x))
         iter_start = time.perf_counter()
 
-        # Train and adapt mesh (uses shared training dataset + current mesh for residuals)
-        adapt_mesh_and_train(
+        train_model(
             model,
-            current_mesh,
             shared_dataset,
+            epochs,
+            optimizer=TRAINING_CONFIG["optimizer"],
+            lr=TRAINING_CONFIG["lr"],
+        )
+
+        compute_model_error(
+            model,
             reference_mesh,
             reference_solution,
-            epochs,
             export_images=export_images,
             iteration=iteration,
         )
+
+        current_mesh, _ = method.refine_mesh(current_mesh, model, iteration=iteration)
+        next_x, next_y = method.get_collocation_points(
+            current_mesh,
+            model=model,
+            iteration=iteration + 1,
+        )
+        model.set_mesh_points(next_x, next_y)
+        next_points = torch.stack([next_x, next_y], dim=1).detach().cpu().clone()
+        model.mesh_point_history.append(next_points)
+        model.mesh_point_count_history.append(len(next_x))
+
         _record_iteration_runtime(model, time.perf_counter() - iter_start)
         print(
             f"Iteration {iteration + 1} completed. Current mesh: {len(model.mesh_x):,} points"
         )
 
     print(f"\n{'='*60}")
-    print("ADAPTIVE TRAINING COMPLETED")
+    print(f"{method_name.upper()} TRAINING COMPLETED")
     print(f"{'='*60}")
 
     return model
+
+
+def run_adaptive_training_fair(
+    problem,
+    initial_mesh,
+    initial_fem_solution,
+    shared_dataset,
+    reference_mesh,
+    reference_solution,
+    num_adaptations,
+    epochs,
+    export_images,
+    initial_state_dict=None,
+    method_seed=None,
+):
+    """Backward-compatible wrapper for the residual-only adaptive baseline."""
+    return run_mesh_refinement_method_training_fair(
+        method_name="adaptive",
+        problem=problem,
+        initial_mesh=initial_mesh,
+        initial_fem_solution=initial_fem_solution,
+        shared_dataset=shared_dataset,
+        reference_mesh=reference_mesh,
+        reference_solution=reference_solution,
+        num_adaptations=num_adaptations,
+        epochs=epochs,
+        export_images=export_images,
+        initial_state_dict=initial_state_dict,
+        method_seed=method_seed,
+    )
 
 
 def run_method_training_fair(
@@ -208,48 +326,13 @@ def run_method_training_fair(
         compute_random_model_error,
         compute_random_residuals,
     )
-    from config import DEVICE, QUASI_RANDOM_CONFIG, RAD_CONFIG, RANDOM_R_CONFIG
-
     print(f"\n{'='*60}")
     print(f"METHOD TRAINING: {method_name.upper()}")
     print(f"{'='*60}")
     if method_seed is not None:
         set_global_seed(method_seed)
 
-    # Get method instance with appropriate config
-    domain_bounds = problem.get_sampling_bounds()
-
-    if method_name == "rad":
-        method = get_method(
-            method_name,
-            domain_bounds=domain_bounds,
-            k=RAD_CONFIG["k"],
-            c=RAD_CONFIG["c"],
-            num_candidates=RAD_CONFIG["num_candidates"],
-            resample_period=RAD_CONFIG["resample_period"],
-            seed=method_seed,
-        )
-    elif method_name == "random_r":
-        method = get_method(
-            method_name,
-            domain_bounds=domain_bounds,
-            resample_period=RANDOM_R_CONFIG["resample_period"],
-            seed=method_seed,
-        )
-    elif method_name in ("halton", "sobol"):
-        method = get_method(
-            method_name,
-            domain_bounds=domain_bounds,
-            seed=method_seed if method_seed is not None else QUASI_RANDOM_CONFIG["seed"],
-        )
-    else:
-        # Fallback for other methods
-        try:
-            method = get_method(method_name, domain_bounds=domain_bounds)
-        except TypeError:
-            method = get_method(method_name)
-    if hasattr(method, "set_problem"):
-        method.set_problem(problem)
+    method = _build_method_instance(method_name, problem, method_seed)
 
     print(f"Method: {method.name} - {method.description}")
 
@@ -448,9 +531,14 @@ def run_complete_experiment(
     # Dictionary to store all trained models
     trained_models = {}
     execution_order = list(methods_to_run)
-    if "adaptive" in execution_order:
-        execution_order = ["adaptive"] + [
-            method for method in execution_order if method != "adaptive"
+    adaptive_budget_method = None
+    for candidate in ("adaptive", "adaptive_hybrid_anchor"):
+        if candidate in execution_order:
+            adaptive_budget_method = candidate
+            break
+    if adaptive_budget_method is not None:
+        execution_order = [adaptive_budget_method] + [
+            method for method in execution_order if method != adaptive_budget_method
         ]
 
     # Run each requested method with shared components
@@ -461,28 +549,30 @@ def run_complete_experiment(
         method_seed = _method_seed(seed, method)
         method_mesh = _clone_mesh(initial_mesh)
 
-        if method == "adaptive":
-            print("Starting adaptive mesh training...")
-            model = run_adaptive_training_fair(
-                problem,
-                method_mesh,
-                shared_training_dataset,
-                reference_mesh,
-                reference_solution,
-                num_adaptations,
-                epochs,
-                export_images,
+        if method in MESH_REFINEMENT_METHODS:
+            print(f"Starting {method} mesh-refinement training...")
+            model = run_mesh_refinement_method_training_fair(
+                method_name=method,
+                problem=problem,
+                initial_mesh=method_mesh,
+                initial_fem_solution=gfu,
+                shared_dataset=shared_training_dataset,
+                reference_mesh=reference_mesh,
+                reference_solution=reference_solution,
+                num_adaptations=num_adaptations,
+                epochs=epochs,
+                export_images=export_images,
                 initial_state_dict=initial_model_state,
                 method_seed=method_seed,
             )
-            trained_models["adaptive"] = model
+            trained_models[method] = model
 
         elif method in list_methods():
             # Use generalized method training for all registered methods
             reference_counts = None
-            if "adaptive" in trained_models:
+            if adaptive_budget_method in trained_models:
                 reference_counts = trained_models[
-                    "adaptive"
+                    adaptive_budget_method
                 ].iteration_point_count_history
 
             print(f"Starting {method} training...")

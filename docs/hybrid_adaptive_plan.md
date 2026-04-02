@@ -1,5 +1,7 @@
 # Hybrid Adaptive Method Plan
 
+Status: implemented on April 2, 2026 as `adaptive_hybrid_anchor`.
+
 ## Goal
 
 Add a new adaptive method that refines the mesh using a blended local score:
@@ -37,9 +39,10 @@ Create a fixed anchor set of labeled FEM pairs:
 - solve/evaluate FEM at those points
 - keep this anchor set fixed across all iterations
 
-Initial implementation:
-- start with anchor points sampled from the initial mesh or domain interior
-- use a moderate anchor count so scoring is informative but not too expensive
+Implemented:
+- sample fixed anchor points uniformly from the domain interior using rejection sampling on the initial mesh
+- label them once using the initial FEM solution
+- keep the anchor set fixed across all iterations
 
 ### 2. Local Data-Error Indicator
 
@@ -51,9 +54,9 @@ Map pointwise errors to mesh elements:
 - start with nearest-element or containing-element averaging
 - aggregate point errors per element to get `E(K)`
 
-First implementation choice:
-- use containing-element assignment if backend access is stable
-- otherwise use nearest-vertex / nearest-element fallback with a clear TODO
+Implemented choice:
+- use containing-element assignment through `mesh(x, y).nr`
+- average pointwise anchor errors within each current mesh element to form `E(K)`
 
 ### 3. Local Residual Indicator
 
@@ -67,7 +70,7 @@ Important:
 
 Normalize both channels robustly per iteration.
 
-Initial normalization rule:
+Implemented normalization rule:
 - compute `q95(R)` and `q95(E)`
 - clip each field at its 95th percentile
 - divide by the clipped scale plus epsilon
@@ -91,37 +94,23 @@ Refine elements with:
 
 `score(K) > tau * max(score)`
 
-Initial parameters:
+Current default parameters:
 - `alpha = 1.0`
 - `beta = 1.0`
 - `tau = current refinement threshold`
 
 These should later become method-specific configuration knobs.
 
-## Implementation Steps
+## Implementation Record
 
-1. Add a plan-level config for the hybrid method:
-   - anchor count
-   - `alpha`
-   - `beta`
-   - quantile for normalization
-
-2. Add a helper to build the fixed anchor set once per run.
-
-3. Add a helper to compute pointwise anchor errors from the current PINN.
-
-4. Add a helper to aggregate anchor errors into elementwise `E(K)`.
-
-5. Add a helper to normalize elementwise indicators robustly.
-
-6. Implement a new method, likely `adaptive_hybrid_anchor`, without changing the existing `adaptive` method.
-
-7. Log the residual and data-error channels separately so the behavior is inspectable.
-
-8. Compare against:
-   - `adaptive` residual-only
-   - `random`
-   - one low-discrepancy baseline such as `halton` or `sobol`
+Completed:
+1. Added `HYBRID_ADAPTIVE_CONFIG` for anchor count, blend weights, and normalization quantile.
+2. Implemented `train/methods/hybrid_anchor.py` and registered `adaptive_hybrid_anchor`.
+3. Added fixed-anchor initialization from the initial FEM solution.
+4. Added containing-element aggregation of anchor point errors to elementwise `E(K)`.
+5. Added robust per-iteration normalization for both residual and anchor-error channels.
+6. Routed the new method through the mesh-refinement experiment path without touching the dense reference mesh.
+7. Added per-iteration hybrid refinement stats on the trained model.
 
 ## Validation Plan
 
@@ -142,13 +131,13 @@ Useful ablations:
 - hybrid with equal weights
 - hybrid with `alpha > beta`
 
-## Risks
+## Current Risks
 
 - backend fragility in element lookup / assignment for anchor points
 - data-error field may be too sparse or noisy if anchor coverage is weak
 - blended score may over-prioritize labeled regions and under-refine PDE-difficult regions
-- current adaptive fine-tuning asymmetry should still be cleaned up for fair comparisons
+- the current implementation stores summary stats for the hybrid channels, but not full per-element diagnostic dumps
 
-## Immediate Next Step
+## Next Analysis Step
 
-Take a repository snapshot with this plan committed, then implement the hybrid method on top of that checkpoint.
+Run multi-seed comparisons against `adaptive`, `random`, and at least one low-discrepancy baseline to see whether the hybrid scoring improves error versus point count and runtime.

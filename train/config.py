@@ -132,3 +132,12 @@ RANDOM_R_CONFIG = {
 QUASI_RANDOM_CONFIG = {
     "seed": 42,  # Seed for reproducible low-discrepancy sequences
 }
+
+# Hybrid adaptive refinement parameters
+HYBRID_ADAPTIVE_CONFIG = {
+    "anchor_count": 512,  # Fixed FEM-labeled anchor points sampled once per run
+    "alpha": 1.0,  # Weight for normalized residual indicator
+    "beta": 1.0,  # Weight for normalized anchor-error indicator
+    "normalization_quantile": 0.95,  # Quantile used for robust clipping/normalization
+    "anchor_seed_offset": 7919,  # Offset from method seed for deterministic anchor sampling
+}

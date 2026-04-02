@@ -143,15 +143,18 @@ def compute_model_residual_on_reference_quadrature(
     except Exception:
         domain_area = float("nan")
 
-    # Mesh-based per-element accumulation
+    # Mesh-based per-element accumulation using the documented NGSolve mesh API.
     try:
         total = 0.0
         area_sum = 0.0
-        for el in reference_mesh.Elements2D():
+        for el in reference_mesh.Elements(VOL):
             verts = []
             for v in el.vertices:
                 p = reference_mesh[v].point
-                verts.append((p.x, p.y))
+                if hasattr(p, "x"):
+                    verts.append((float(p.x), float(p.y)))
+                else:
+                    verts.append((float(p[0]), float(p[1])))
             if len(verts) != 3:
                 continue
             (x1, y1), (x2, y2), (x3, y3) = verts

@@ -11,6 +11,7 @@ We have implemented multiple sampling methods from Wu et al. (2022) "A Comprehen
 | Method | File | Description | Key Parameters |
 |--------|------|-------------|----------------|
 | `adaptive` | `adaptive.py` | Residual-based mesh refinement (our method) | `refinement_threshold` |
+| `adaptive_hybrid_anchor` | `hybrid_anchor.py` | Residual + anchor-error mesh refinement | `anchor_count`, `alpha`, `beta`, `normalization_quantile` |
 | `random` | `random.py` | Uniform random baseline | - |
 | `halton` | `quasi_random.py` | Halton low-discrepancy sequence | `seed` |
 | `sobol` | `quasi_random.py` | Sobol low-discrepancy sequence | `seed` |
@@ -33,6 +34,13 @@ RANDOM_R_CONFIG = {
 
 QUASI_RANDOM_CONFIG = {
     "seed": 42,              # Reproducibility
+}
+
+HYBRID_ADAPTIVE_CONFIG = {
+    "anchor_count": 512,
+    "alpha": 1.0,
+    "beta": 1.0,
+    "normalization_quantile": 0.95,
 }
 ```
 
@@ -61,7 +69,7 @@ from paths import generate_run_id, set_active_run, write_run_metadata
 from utils import set_global_seed
 import os
 
-METHODS = ['adaptive', 'random', 'halton', 'sobol', 'random_r', 'rad']
+METHODS = ['adaptive', 'adaptive_hybrid_anchor', 'random', 'halton', 'sobol', 'random_r', 'rad']
 SEEDS = [42, 123, 456, 789, 1011, 2022, 3033, 4044, 5055, 6066]
 
 for seed in SEEDS:

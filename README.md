@@ -10,6 +10,7 @@ The code runs controlled experiments, saves per-run artifacts to `outputs/<run-i
 
 You can benchmark and compare the following methods:
 - `adaptive` — Residual-based adaptive mesh refinement
+- `adaptive_hybrid_anchor` — Residual + fixed-anchor supervised-error mesh refinement
 - `random` — Uniform random point sampling (baseline)
 - `halton` — Halton low-discrepancy sequence sampling
 - `sobol` — Sobol low-discrepancy sequence sampling
@@ -19,7 +20,7 @@ You can benchmark and compare the following methods:
 Select methods via CLI/config:
 ```bash
 python3 train/main.py main  # Default: adaptive + random
-python3 train/main.py main --methods adaptive random halton sobol rad
+python3 train/main.py main --methods adaptive adaptive_hybrid_anchor random halton sobol rad
 ```
 Or set `methods_to_run` in your config or experiment script.
 
@@ -92,6 +93,7 @@ Edit `train/config.py`:
 | `MODEL_CONFIG` | `hidden_size`, `w_data`, `w_interior`, `w_bc` |
 | `TRAINING_CONFIG` | `epochs`, `iterations`, `lr`, `seed` |
 | `MESH_CONFIG` | `maxh`, `refinement_threshold` |
+| `HYBRID_ADAPTIVE_CONFIG` | `anchor_count`, `alpha`, `beta`, `normalization_quantile` |
 
 ## Documentation
 
