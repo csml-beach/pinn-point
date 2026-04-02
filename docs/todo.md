@@ -14,7 +14,8 @@ This file tracks follow-ups that should be revisited after the current refactor 
 - [ ] Decouple geometry selection from the current hardcoded L-shaped domain in `train/geometry.py` so problems can own their own domain construction.
 - [ ] Implement the hybrid anchor-based adaptive method described in `docs/hybrid_adaptive_plan.md`.
 
-## Comparisons / Reporting
+## Completed Recently
 
-- [ ] Revisit the adaptive-vs-baseline budget policy to ensure all methods are matched on a fair compute budget, not only on point counts.
-- [ ] Add a small regression set of smoke runs for the main baselines so implementation changes can be checked quickly after major edits.
+- [x] Add a first-class smoke-test path (`scripts/smoke_test.sh` and `train/main.py smoke`) so major changes can be checked with a tiny end-to-end run.
+- [x] Expand the canonical multi-method metrics/reporting stack described in `docs/metrics_expansion_plan.md` before implementing the hybrid method.
+- [x] Revisit the adaptive-vs-baseline budget policy so all methods use the same configured optimizer-step budget per iteration, adaptive no longer gets extra fine-tuning, and runtime metrics include method-specific sampling/refinement overhead.

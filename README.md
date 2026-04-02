@@ -23,20 +23,42 @@ python3 train/main.py main --methods adaptive random halton sobol rad
 ```
 Or set `methods_to_run` in your config or experiment script.
 
+## Device Selection
+
+The runtime device can be selected explicitly:
+
+```bash
+# Auto-select (default): CUDA if available, otherwise CPU
+python3 train/main.py main
+
+# Force CUDA
+python3 train/main.py --device cuda:0 main
+
+# Force CPU
+python3 train/main.py --device cpu main
+
+# Smoke tests default to CPU
+scripts/smoke_test.sh --seed 123
+```
+
+You can also use the environment variable:
+
+```bash
+PINN_DEVICE=cuda:0 python3 train/main.py main
+PINN_DEVICE=cpu scripts/smoke_test.sh
+```
+
 ## Quick Start
 
 ```bash
 # Run a single experiment
 python3 train/main.py main
 
-# Quick test (small/fast)
-python3 train/main.py test
+# Smoke test (CPU by default)
+scripts/smoke_test.sh
 
 # Hyperparameter study
-python3 train/main.py hparams configs/param_study_1.json --images
-
-# Show all commands
-python3 train/main.py help
+python3 train/main.py hparams my_grid.json --images
 ```
 
 ## Requirements
@@ -76,12 +98,16 @@ Edit `train/config.py`:
 - [Architecture Overview](docs/ARCHITECTURE.md) — code structure and design
 - [Parameter Studies](docs/parameter_study.md) — hyperparameter sweeps and ablation plots
 - [Output Format](docs/histories_csv.md) — CSV columns and metrics
+- [Hybrid Adaptive Plan](docs/hybrid_adaptive_plan.md) — anchor-based hybrid refinement design
+- [Repo TODO](docs/todo.md) — active follow-ups and completed milestones
 
 ## Outputs
 
 Each run creates `outputs/<timestamp>_<tag>/`:
-- `images/` — plots, GIFs
-- `reports/histories.csv` — metrics for aggregation
+- `images/` — plots and per-method convergence figures
+- `reports/all_methods_histories.csv` — canonical per-method metrics
+- `reports/performance_summary.txt` — summarized end-of-run metrics
+- `reports/point_usage_table.txt` — per-iteration collocation budgets
 - `reports/run_config.json` — full config, system info, git state, seed
 
 ## Reproducibility

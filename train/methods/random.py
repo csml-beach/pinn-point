@@ -9,6 +9,7 @@ import torch
 import numpy as np
 from typing import Tuple, Optional, Any
 from .base import TrainingMethod
+from .sampling import points_to_tensors, sample_points_in_domain
 
 
 class RandomMethod(TrainingMethod):
@@ -55,53 +56,19 @@ class RandomMethod(TrainingMethod):
 
         x_min, x_max, y_min, y_max = self.domain_bounds
 
-        # Generate random points, rejecting those outside the domain
-        random_points = []
-        max_attempts = num_points * 20
-        attempts = 0
-
-        while len(random_points) < num_points and attempts < max_attempts:
-            x = np.random.uniform(x_min, x_max)
-            y = np.random.uniform(y_min, y_max)
-
-            # Check if point is inside mesh domain
-            try:
-                if mesh(x, y).nr != -1:
-                    random_points.append((x, y))
-            except Exception:
-                pass
-            attempts += 1
-
-        if len(random_points) < num_points:
-            print(
-                f"Warning: Generated {len(random_points)}/{num_points} points after {attempts} attempts"
-            )
-
-        if len(random_points) == 0:
-            raise ValueError("Could not generate any valid random points in the domain")
-
-        points = np.array(random_points)
-        x = torch.tensor(points[:, 0], dtype=torch.float32)
-        y = torch.tensor(points[:, 1], dtype=torch.float32)
-
-        return x, y
-
-    def refine_mesh(
-        self, mesh: Any, model: Any, iteration: int = 0
-    ) -> Tuple[Any, bool]:
-        """Random method does not refine mesh.
-
-        Returns the mesh unchanged.
-
-        Args:
-            mesh: Current mesh
-            model: Model (unused)
-            iteration: Current iteration
-
-        Returns:
-            Tuple of (same_mesh, False) indicating no refinement
-        """
-        return mesh, False
+        points = sample_points_in_domain(
+            mesh,
+            num_points,
+            lambda batch_size: np.column_stack(
+                (
+                    np.random.uniform(x_min, x_max, size=batch_size),
+                    np.random.uniform(y_min, y_max, size=batch_size),
+                )
+            ),
+            max_batches=20,
+            warn_label="random points",
+        )
+        return points_to_tensors(points)
 
     def should_refine(self, iteration: int, max_iterations: int) -> bool:
         """Random method never refines."""

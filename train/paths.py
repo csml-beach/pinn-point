@@ -13,22 +13,23 @@ import json
 import os
 import subprocess
 from datetime import datetime
+from functools import lru_cache
 from typing import Dict, Optional
 
 from config import (
     PROJECT_ROOT,
-    DIRECTORY as DEFAULT_IMAGES,
-    REPORTS_DIRECTORY as DEFAULT_REPORTS,
     MODEL_CONFIG,
     TRAINING_CONFIG,
     MESH_CONFIG,
     RANDOM_CONFIG,
+    RUNTIME_CONFIG,
     VIZ_CONFIG,
 )
 
 
 OUTPUTS_ROOT = os.path.join(PROJECT_ROOT, "outputs")
 ACTIVE_RUN: Optional[Dict[str, str]] = None
+DEFAULT_RUN_ID = "_default"
 
 
 def generate_run_id(tag: Optional[str] = None) -> str:
@@ -56,22 +57,23 @@ def set_active_run(run_id: str) -> Dict[str, str]:
     return ACTIVE_RUN
 
 
+@lru_cache(maxsize=1)
+def _default_paths() -> Dict[str, str]:
+    return get_paths(DEFAULT_RUN_ID)
+
+
 def images_dir() -> str:
-    return ACTIVE_RUN["images"] if ACTIVE_RUN else DEFAULT_IMAGES
+    return ACTIVE_RUN["images"] if ACTIVE_RUN else _default_paths()["images"]
 
 
 def reports_dir() -> str:
-    return ACTIVE_RUN["reports"] if ACTIVE_RUN else DEFAULT_REPORTS
+    return ACTIVE_RUN["reports"] if ACTIVE_RUN else _default_paths()["reports"]
 
 
 def checkpoints_dir() -> str:
     if ACTIVE_RUN:
         return ACTIVE_RUN["checkpoints"]
-    # Fallback default when no active run; co-locate with reports' parent
-    parent = os.path.dirname(DEFAULT_REPORTS)
-    path = os.path.join(parent, "checkpoints")
-    os.makedirs(path, exist_ok=True)
-    return path
+    return _default_paths()["checkpoints"]
 
 
 def _get_git_info() -> Dict[str, str]:
@@ -128,6 +130,7 @@ def write_run_metadata(
             "training": TRAINING_CONFIG,
             "mesh": MESH_CONFIG,
             "random": RANDOM_CONFIG,
+            "runtime": RUNTIME_CONFIG,
             "viz": VIZ_CONFIG,
         },
         "git": _get_git_info(),

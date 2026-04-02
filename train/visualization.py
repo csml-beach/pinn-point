@@ -9,22 +9,10 @@ import tempfile
 from typing import List
 from PIL import Image
 import numpy as np
-from config import DIRECTORY, REPORTS_DIRECTORY, VIZ_CONFIG
+from config import VIZ_CONFIG
 import matplotlib
 import matplotlib.pyplot as plt
-
-try:
-    from paths import images_dir as _images_dir, reports_dir as _reports_dir
-
-    images_dir = _images_dir
-    reports_dir = _reports_dir
-except Exception:
-
-    def images_dir():
-        return DIRECTORY
-
-    def reports_dir():
-        return REPORTS_DIRECTORY
+from paths import images_dir, reports_dir
 
 
 # Configure matplotlib backend before using pyplot
@@ -214,148 +202,57 @@ def ensure_figure_closed(func):
     return wrapper
 
 
-def write_histories_csv(
-    adaptive_model,
-    random_model,
-    filename: str = "histories.csv",
-    output_dir: str | None = None,
-) -> str:
-    """Write key training histories for both methods into a CSV for postprocessing.
+def _load_multi_method_series(run_roots: List[str], field: str) -> dict[str, List[np.ndarray]]:
+    """Collect a numeric field from all_methods_histories.csv across runs."""
+    series_by_method: dict[str, List[np.ndarray]] = {}
 
-    Columns: iteration, adaptive_total_error, adaptive_total_residual,
-             random_total_error, random_total_residual,
-             adaptive_fixed_total_residual, adaptive_fixed_boundary_residual,
-             random_fixed_total_residual, random_fixed_boundary_residual
+    for root in run_roots:
+        csv_path = os.path.join(root, "reports", "all_methods_histories.csv")
+        if not os.path.exists(csv_path):
+            continue
 
-    Returns: path to the CSV file.
-    """
-    if output_dir is None:
-        output_dir = reports_dir()
-    os.makedirs(output_dir, exist_ok=True)
-    path = os.path.join(output_dir, filename)
+        per_method: dict[str, List[float]] = {}
+        with open(csv_path) as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                method = (row.get("method") or "").strip()
+                if not method:
+                    continue
+                raw_val = row.get(field, "")
+                try:
+                    value = float(raw_val) if raw_val not in ("", None) else np.nan
+                except Exception:
+                    value = np.nan
+                per_method.setdefault(method, []).append(value)
 
-    a_err = list(getattr(adaptive_model, "total_error_history", []) or [])
-    a_err_rms = list(getattr(adaptive_model, "total_error_rms_history", []) or [])
-    a_res = list(getattr(adaptive_model, "total_residual_history", []) or [])
-    a_fix_tot = list(getattr(adaptive_model, "fixed_total_residual_history", []) or [])
-    a_fix_bnd = list(
-        getattr(adaptive_model, "fixed_boundary_residual_history", []) or []
-    )
-    a_fix_rms = list(getattr(adaptive_model, "fixed_rms_residual_history", []) or [])
+        for method, values in per_method.items():
+            if values:
+                series_by_method.setdefault(method, []).append(
+                    np.array(values, dtype=float)
+                )
 
-    r_err = list(getattr(random_model, "total_error_history", []) or [])
-    r_err_rms = list(getattr(random_model, "total_error_rms_history", []) or [])
-    r_res = list(getattr(random_model, "total_residual_history", []) or [])
-    r_fix_tot = list(getattr(random_model, "fixed_total_residual_history", []) or [])
-    r_fix_bnd = list(getattr(random_model, "fixed_boundary_residual_history", []) or [])
-    r_fix_rms = list(getattr(random_model, "fixed_rms_residual_history", []) or [])
+    return series_by_method
 
-    n = max(
-        len(a_err),
-        len(a_err_rms),
-        len(a_res),
-        len(a_fix_tot),
-        len(a_fix_bnd),
-        len(a_fix_rms),
-        len(r_err),
-        len(r_err_rms),
-        len(r_res),
-        len(r_fix_tot),
-        len(r_fix_bnd),
-        len(r_fix_rms),
-    )
 
-    with open(path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(
-            [
-                "iteration",
-                "adaptive_total_error",
-                "adaptive_total_residual",
-                "random_total_error",
-                "adaptive_total_error_rms",
-                "random_total_error_rms",
-                "random_total_residual",
-                "adaptive_fixed_total_residual",
-                "adaptive_fixed_boundary_residual",
-                "random_fixed_total_residual",
-                "random_fixed_boundary_residual",
-                "adaptive_fixed_rms_residual",
-                "random_fixed_rms_residual",
-            ]
-        )
-        for i in range(n):
-            row = [
-                i,
-                a_err[i] if i < len(a_err) else np.nan,
-                a_res[i] if i < len(a_res) else np.nan,
-                r_err[i] if i < len(r_err) else np.nan,
-                a_err_rms[i] if i < len(a_err_rms) else np.nan,
-                r_err_rms[i] if i < len(r_err_rms) else np.nan,
-                r_res[i] if i < len(r_res) else np.nan,
-                a_fix_tot[i] if i < len(a_fix_tot) else np.nan,
-                a_fix_bnd[i] if i < len(a_fix_bnd) else np.nan,
-                r_fix_tot[i] if i < len(r_fix_tot) else np.nan,
-                r_fix_bnd[i] if i < len(r_fix_bnd) else np.nan,
-                a_fix_rms[i] if i < len(a_fix_rms) else np.nan,
-                r_fix_rms[i] if i < len(r_fix_rms) else np.nan,
-            ]
-            w.writerow(row)
-    print(
-        f"Histories CSV saved to {path} | lens: a_err={len(a_err)}, a_res={len(a_res)}, a_fix={len(a_fix_tot)}, "
-        f"r_err={len(r_err)}, r_res={len(r_res)}, r_fix={len(r_fix_tot)}"
-    )
-    return path
+def _pad_stack(series: List[np.ndarray]) -> np.ndarray:
+    if not series:
+        return np.empty((0, 0))
+    length = max(len(s) for s in series)
+    padded = []
+    for s in series:
+        if len(s) < length:
+            s = np.concatenate([s, np.full(length - len(s), np.nan)])
+        padded.append(s)
+    return np.vstack(padded)
 
 
 @ensure_figure_closed
 def plot_ablation_error_shaded(
     run_roots: List[str], save_path: str, title: str = "Error vs Iteration (mean ± std)"
 ):
-    """Aggregate error histories from multiple run roots and plot mean±std shading.
-
-    Expects each root to contain reports/histories.csv as produced by write_histories_csv.
-    """
-    # Collect series
-    A_list, R_list = [], []
-    for root in run_roots:
-        csv_path = os.path.join(root, "reports", "histories.csv")
-        if not os.path.exists(csv_path):
-            continue
-        with open(csv_path) as f:
-            reader = csv.DictReader(f)
-            a_vals, r_vals = [], []
-            for row in reader:
-                a = row.get("adaptive_total_error", "")
-                r = row.get("random_total_error", "")
-                try:
-                    a_vals.append(float(a)) if a != "" else a_vals.append(np.nan)
-                except Exception:
-                    a_vals.append(np.nan)
-                try:
-                    r_vals.append(float(r)) if r != "" else r_vals.append(np.nan)
-                except Exception:
-                    r_vals.append(np.nan)
-        if a_vals:
-            A_list.append(np.array(a_vals, dtype=float))
-        if r_vals:
-            R_list.append(np.array(r_vals, dtype=float))
-
-    def pad_stack(series):
-        if not series:
-            return np.empty((0, 0))
-        L = max(len(s) for s in series)
-        out = []
-        for s in series:
-            if len(s) < L:
-                s = np.concatenate([s, np.full(L - len(s), np.nan)])
-            out.append(s)
-        return np.vstack(out)
-
-    A = pad_stack(A_list)
-    R = pad_stack(R_list)
-
-    if A.size == 0 and R.size == 0:
+    """Aggregate total_error from all_methods_histories.csv and plot mean±std shading."""
+    series_by_method = _load_multi_method_series(run_roots, "total_error")
+    if not series_by_method:
         print("No histories found; skipping ablation plot")
         return
 
@@ -364,20 +261,25 @@ def plot_ablation_error_shaded(
     plt.xlabel("Iteration")
     plt.ylabel("Total Error")
     plt.yscale("log")
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
 
-    def plot_band(M, color, label):
-        if M.size == 0:
-            return
-        mean = np.nanmean(M, axis=0)
-        std = np.nanstd(M, axis=0)
+    for idx, method in enumerate(sorted(series_by_method)):
+        stacked = _pad_stack(series_by_method[method])
+        if stacked.size == 0:
+            continue
+        mean = np.nanmean(stacked, axis=0)
+        std = np.nanstd(stacked, axis=0)
         x = np.arange(len(mean))
-        plt.plot(x, mean, color=color, label=label, linewidth=2)
+        color = color_cycle[idx % len(color_cycle)] if color_cycle else None
+        plt.plot(x, mean, color=color, label=f"{method} (mean ± std)", linewidth=2)
         plt.fill_between(
-            x, np.maximum(mean - std, 1e-32), mean + std, color=color, alpha=0.2
+            x,
+            np.maximum(mean - std, 1e-32),
+            mean + std,
+            color=color,
+            alpha=0.2,
         )
 
-    plot_band(A, "tab:blue", "Adaptive (mean ± std)")
-    plot_band(R, "tab:orange", "Random (mean ± std)")
     plt.legend()
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
@@ -390,49 +292,9 @@ def plot_ablation_fixed_residual_shaded(
     save_path: str,
     title: str = "Fixed residual ∫Ω r^2 (mean ± std)",
 ):
-    """Aggregate fixed residual histories from multiple run roots and plot mean±std shading."""
-    import csv
-    import numpy as np
-
-    A_list, R_list = [], []
-    for root in run_roots:
-        csv_path = os.path.join(root, "reports", "histories.csv")
-        if not os.path.exists(csv_path):
-            continue
-        with open(csv_path) as f:
-            reader = csv.DictReader(f)
-            a_vals, r_vals = [], []
-            for row in reader:
-                a = row.get("adaptive_fixed_total_residual", "")
-                r = row.get("random_fixed_total_residual", "")
-                try:
-                    a_vals.append(float(a)) if a != "" else a_vals.append(np.nan)
-                except Exception:
-                    a_vals.append(np.nan)
-                try:
-                    r_vals.append(float(r)) if r != "" else r_vals.append(np.nan)
-                except Exception:
-                    r_vals.append(np.nan)
-        if a_vals:
-            A_list.append(np.array(a_vals, dtype=float))
-        if r_vals:
-            R_list.append(np.array(r_vals, dtype=float))
-
-    def pad_stack(series):
-        if not series:
-            return np.empty((0, 0))
-        L = max(len(s) for s in series)
-        out = []
-        for s in series:
-            if len(s) < L:
-                s = np.concatenate([s, np.full(L - len(s), np.nan)])
-            out.append(s)
-        return np.vstack(out)
-
-    A = pad_stack(A_list)
-    R = pad_stack(R_list)
-
-    if A.size == 0 and R.size == 0:
+    """Aggregate fixed_total_residual from all_methods_histories.csv and plot mean±std shading."""
+    series_by_method = _load_multi_method_series(run_roots, "fixed_total_residual")
+    if not series_by_method:
         print(
             "No fixed residual histories found; skipping ablation fixed residual plot"
         )
@@ -443,350 +305,227 @@ def plot_ablation_fixed_residual_shaded(
     plt.xlabel("Iteration")
     plt.ylabel("∫Ω r(x)^2 dΩ")
     plt.yscale("log")
+    color_cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color", [])
 
-    def plot_band(M, color, label):
-        if M.size == 0:
-            return
-        mean = np.nanmean(M, axis=0)
-        std = np.nanstd(M, axis=0)
+    for idx, method in enumerate(sorted(series_by_method)):
+        stacked = _pad_stack(series_by_method[method])
+        if stacked.size == 0:
+            continue
+        mean = np.nanmean(stacked, axis=0)
+        std = np.nanstd(stacked, axis=0)
         x = np.arange(len(mean))
-        plt.plot(x, mean, color=color, label=label, linewidth=2)
+        color = color_cycle[idx % len(color_cycle)] if color_cycle else None
+        plt.plot(x, mean, color=color, label=f"{method} (mean ± std)", linewidth=2)
         plt.fill_between(
-            x, np.maximum(mean - std, 1e-32), mean + std, color=color, alpha=0.2
+            x,
+            np.maximum(mean - std, 1e-32),
+            mean + std,
+            color=color,
+            alpha=0.2,
         )
 
-    plot_band(A, "tab:blue", "Adaptive (mean ± std)")
-    plot_band(R, "tab:orange", "Random (mean ± std)")
     plt.legend()
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     print(f"Ablation fixed residual plot saved to {save_path}")
 
 
-@ensure_figure_closed
-def plot_fixed_residual_comparison(
-    adaptive_model,
-    random_model,
-    save_path: str | None = None,
-    title: str = "Fixed reference-mesh RMS residual",
-):
-    """Plot fixed-grid RMS residual histories for both methods on a semilog y-axis."""
-    a = list(getattr(adaptive_model, "fixed_rms_residual_history", []) or [])
-    r = list(getattr(random_model, "fixed_rms_residual_history", []) or [])
-    if not a and not r:
-        print("No fixed residual histories; skipping plot")
-        return
+def _method_label(method_name: str) -> str:
+    return method_name.replace("_", " ").title()
 
+
+def _history_as_array(model, attr: str) -> np.ndarray:
+    values = getattr(model, attr, []) or []
+    if not values:
+        return np.array([], dtype=float)
+    cleaned = []
+    for value in values:
+        try:
+            cleaned.append(float(value))
+        except Exception:
+            cleaned.append(np.nan)
+    return np.asarray(cleaned, dtype=float)
+
+
+def _aligned_history(model, y_attr: str, x_attr: str | None = None) -> tuple[np.ndarray, np.ndarray]:
+    y_values = _history_as_array(model, y_attr)
+    if y_values.size == 0:
+        return np.array([], dtype=float), np.array([], dtype=float)
+
+    if x_attr is None:
+        x_values = np.arange(1, len(y_values) + 1, dtype=float)
+    else:
+        x_values = _history_as_array(model, x_attr)
+        if x_values.size == 0:
+            x_values = np.arange(1, len(y_values) + 1, dtype=float)
+
+    length = min(len(x_values), len(y_values))
+    return x_values[:length], y_values[:length]
+
+
+@ensure_figure_closed
+def plot_multi_method_comparison(
+    trained_models: dict,
+    history_attr: str,
+    save_path: str,
+    *,
+    title: str,
+    ylabel: str,
+    xlabel: str = "Iteration",
+    logy: bool = True,
+    x_attr: str | None = None,
+):
+    """Plot one tracked metric for every trained method."""
     plt.figure(figsize=(7, 5))
-    plt.title(title)
-    plt.xlabel("Iteration")
-    plt.ylabel("RMS residual (sqrt(mean(r^2)))")
-    plt.yscale("log")
-    if a:
-        plt.semilogy(
-            range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6
-        )
-    if r:
-        plt.semilogy(
-            range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6
-        )
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    if save_path is None:
-        save_path = os.path.join(images_dir(), "fixed_residual_comparison.png")
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Fixed residual comparison saved to {save_path}")
+    plotted = False
 
+    for method_name, model in sorted(trained_models.items()):
+        x_values, y_values = _aligned_history(model, history_attr, x_attr=x_attr)
+        if y_values.size == 0:
+            continue
 
-@ensure_figure_closed
-def plot_fixed_error_rms_comparison(
-    adaptive_model,
-    random_model,
-    save_path: str | None = None,
-    title: str = "Fixed reference-mesh RMS error",
-):
-    """Plot fixed-grid RMS error histories for both methods on a semilog y-axis."""
-    a = list(getattr(adaptive_model, "total_error_rms_history", []) or [])
-    r = list(getattr(random_model, "total_error_rms_history", []) or [])
-    if not a and not r:
-        print("No RMS error histories; skipping plot")
-        return
-
-    plt.figure(figsize=(7, 5))
-    plt.title(title)
-    plt.xlabel("Iteration")
-    plt.ylabel("RMS error (sqrt(mean((u-u_ref)^2)))")
-    plt.yscale("log")
-    if a:
-        plt.semilogy(
-            range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6
-        )
-    if r:
-        plt.semilogy(
-            range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6
-        )
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    if save_path is None:
-        save_path = os.path.join(images_dir(), "fixed_error_rms_comparison.png")
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Fixed RMS error comparison saved to {save_path}")
-
-
-@ensure_figure_closed
-def plot_error_integral_comparison(
-    adaptive_model,
-    random_model,
-    save_path: str | None = None,
-    title: str = "Integrated error ∫Ω (u-u_ref)^2 dΩ",
-):
-    """Plot integrated error histories for both methods on a semilog y-axis."""
-    a = list(getattr(adaptive_model, "total_error_history", []) or [])
-    r = list(getattr(random_model, "total_error_history", []) or [])
-    if not a and not r:
-        print("No integrated error histories; skipping plot")
-        return
-
-    plt.figure(figsize=(7, 5))
-    plt.title(title)
-    plt.xlabel("Iteration")
-    plt.ylabel("Integrated error ∫Ω (u-u_ref)^2 dΩ")
-    plt.yscale("log")
-    if a:
-        plt.semilogy(
-            range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6
-        )
-    if r:
-        plt.semilogy(
-            range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6
-        )
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    if save_path is None:
-        save_path = os.path.join(images_dir(), "error_integral_comparison.png")
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Integrated error comparison saved to {save_path}")
-
-
-@ensure_figure_closed
-def plot_fixed_residual_integral_comparison(
-    adaptive_model,
-    random_model,
-    save_path: str | None = None,
-    title: str = "Fixed reference-mesh ∫Ω r^2 dΩ",
-):
-    """Plot fixed-grid integral of residual^2 histories for both methods on a semilog y-axis."""
-    a = list(getattr(adaptive_model, "fixed_total_residual_history", []) or [])
-    r = list(getattr(random_model, "fixed_total_residual_history", []) or [])
-    if not a and not r:
-        print("No fixed residual integral histories; skipping plot")
-        return
-
-    plt.figure(figsize=(7, 5))
-    plt.title(title)
-    plt.xlabel("Iteration")
-    plt.ylabel("∫Ω r(x)^2 dΩ")
-    plt.yscale("log")
-    if a:
-        plt.semilogy(
-            range(len(a)), a, "b-o", label="Adaptive", linewidth=2, markersize=6
-        )
-    if r:
-        plt.semilogy(
-            range(len(r)), r, "r--s", label="Random", linewidth=2, markersize=6
-        )
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    if save_path is None:
-        save_path = os.path.join(images_dir(), "fixed_residual_integral_comparison.png")
-    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches="tight")
-    print(f"Fixed residual integral comparison saved to {save_path}")
-
-
-@ensure_figure_closed
-def plot_points_vs_iteration(
-    adaptive_model,
-    save_path=None,
-    title: str = "Interior points vs iteration (adaptive)",
-):
-    """Plot the number of interior residual points per iteration for the adaptive method."""
-    try:
-        hist = list(getattr(adaptive_model, "mesh_point_count_history", []) or [])
-        if not hist:
-            print("No point count history; skipping points vs iteration plot")
-            return
-        # Remove duplicates for cleaner visualization
-        unique_counts = []
-        prev = None
-        for c in hist:
-            if c != prev:
-                unique_counts.append(c)
-                prev = c
-        plt.figure(figsize=(7, 5))
-        plt.plot(
-            range(len(unique_counts)), unique_counts, "b-o", linewidth=2, markersize=6
-        )
-        plt.xlabel("Iteration")
-        plt.ylabel("Number of interior residual points")
-        plt.title(title)
-        plt.grid(True, alpha=0.3)
-        if len(unique_counts) > 1 and unique_counts[0] > 0:
-            factor = unique_counts[-1] / unique_counts[0]
-            plt.text(
-                0.02,
-                0.98,
-                f"Grow: ×{factor:.2f}",
-                transform=plt.gca().transAxes,
-                va="top",
-                bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.7),
+        if logy:
+            positive = np.where(y_values > 0, y_values, np.nan)
+            if np.all(np.isnan(positive)):
+                continue
+            plt.semilogy(
+                x_values,
+                positive,
+                marker="o",
+                linewidth=2,
+                markersize=5,
+                label=_method_label(method_name),
             )
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches="tight")
-            print(f"Points vs iteration saved to {save_path}")
-    except Exception as e:
-        print(f"Error creating points vs iteration plot: {e}")
-        import traceback
+        else:
+            plt.plot(
+                x_values,
+                y_values,
+                marker="o",
+                linewidth=2,
+                markersize=5,
+                label=_method_label(method_name),
+            )
+        plotted = True
 
-        traceback.print_exc()
-        plt.close()
+    if not plotted:
+        print(f"No {history_attr} histories; skipping plot")
+        return
+
+    plt.title(title)
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    print(f"Comparison plot saved to {save_path}")
 
 
-def create_performance_summary(adaptive_model, random_model, save_path=None):
-    """
-    Create a text summary of key performance metrics.
+def create_multi_method_performance_summary(trained_models: dict, save_path: str | None = None):
+    """Create a concise text summary for all trained methods."""
+    lines = ["PINN EXPERIMENT SUMMARY", "=" * 50, ""]
+    ranking: list[tuple[float, str]] = []
 
-    Args:
-        adaptive_model: Trained adaptive PINN model
-        random_model: Trained random PINN model
-        save_path: Optional path to save the summary
-    """
-    summary_lines = []
-    summary_lines.append("PINN ADAPTIVE MESH EXPERIMENT SUMMARY")
-    summary_lines.append("=" * 50)
-    summary_lines.append("")
+    for method_name, model in sorted(trained_models.items()):
+        label = _method_label(method_name)
+        lines.append(f"{label}:")
 
-    # Adaptive model metrics
-    summary_lines.append("ADAPTIVE MESH METHOD:")
-    if adaptive_model.mesh_point_count_history:
-        initial = adaptive_model.mesh_point_count_history[0]
-        final = adaptive_model.mesh_point_count_history[-1]
-        factor = final / initial
-        summary_lines.append(
-            f"  Mesh progression: {initial:,} → {final:,} points (×{factor:.2f})"
-        )
+        point_counts = _history_as_array(model, "mesh_point_count_history")
+        if point_counts.size:
+            initial = int(point_counts[0])
+            final = int(point_counts[-1])
+            growth = final / initial if initial else float("nan")
+            lines.append(f"  Points: {initial:,} -> {final:,} (x{growth:.2f})")
 
-    if adaptive_model.total_error_history:
-        initial_error = adaptive_model.total_error_history[0]
-        final_error = adaptive_model.total_error_history[-1]
-        reduction = initial_error / final_error
-        summary_lines.append(
-            f"  Error reduction: {initial_error:.2e} → {final_error:.2e} (×{reduction:.2f})"
-        )
+        total_error = _history_as_array(model, "total_error_history")
+        if total_error.size:
+            lines.append(f"  Final total error: {total_error[-1]:.6e}")
+            ranking.append((total_error[-1], method_name))
 
-    summary_lines.append("")
+        total_error_rms = _history_as_array(model, "total_error_rms_history")
+        if total_error_rms.size:
+            lines.append(f"  Final RMS error: {total_error_rms[-1]:.6e}")
 
-    # Random model metrics
-    summary_lines.append("RANDOM POINTS METHOD:")
-    if random_model.total_error_history:
-        final_random_error = random_model.total_error_history[-1]
-        summary_lines.append(f"  Final error: {final_random_error:.2e}")
+        fixed_residual = _history_as_array(model, "fixed_total_residual_history")
+        if fixed_residual.size:
+            lines.append(f"  Final fixed residual integral: {fixed_residual[-1]:.6e}")
 
-    summary_lines.append("")
+        runtime = _history_as_array(model, "cumulative_runtime_history")
+        if runtime.size:
+            lines.append(f"  Cumulative runtime: {runtime[-1]:.2f}s")
 
-    # Comparison
-    if adaptive_model.total_error_history and random_model.total_error_history:
-        adaptive_final = adaptive_model.total_error_history[-1]
-        random_final = random_model.total_error_history[-1]
-        improvement = ((random_final - adaptive_final) / random_final) * 100
-        summary_lines.append("COMPARISON:")
-        summary_lines.append(
-            f"  Adaptive advantage: {improvement:.1f}% better error rate"
-        )
+        lines.append("")
 
-    summary_text = "\n".join(summary_lines)
+    if ranking:
+        lines.append("FINAL ERROR RANKING:")
+        for idx, (_, method_name) in enumerate(sorted(ranking), start=1):
+            lines.append(f"  {idx}. {_method_label(method_name)}")
 
+    summary_text = "\n".join(lines)
     if save_path:
-        with open(save_path, "w") as f:
-            f.write(summary_text)
+        with open(save_path, "w") as file_obj:
+            file_obj.write(summary_text)
         print(f"Performance summary saved to {save_path}")
     else:
         print(summary_text)
-
     return summary_text
 
 
-def create_point_usage_table(
-    adaptive_model, random_model, dataset_size, save_path=None
+def create_multi_method_point_usage_table(
+    trained_models: dict, dataset_size: int, save_path: str | None = None
 ):
-    """
-    Create a text table of per-iteration labeled and interior point counts for both methods.
-
-    Columns:
-      Iteration | LabeledDatasetSize | LabeledBatchSize | AdaptiveInterior | RandomInterior | Match
-
-    Args:
-        adaptive_model: Trained adaptive PINN model
-        random_model: Trained random PINN model
-        dataset_size: Size of the shared labeled dataset (FEM vertices)
-        save_path: Output path for the table (defaults to reports/point_usage_table.txt)
-    """
-    from config import MODEL_CONFIG
-
+    """Create a per-iteration residual-point table for every method."""
     if save_path is None:
         os.makedirs(reports_dir(), exist_ok=True)
         save_path = os.path.join(reports_dir(), "point_usage_table.txt")
 
-    # Determine number of iterations from histories (index 0 is initial count)
-    adapt_hist = getattr(adaptive_model, "mesh_point_count_history", []) or []
-    rand_hist = getattr(random_model, "mesh_point_count_history", []) or []
-    # Adaptive often stores duplicates per iteration; use indices 1,3,5,...
-    adapt_iters = max(0, (len(adapt_hist) - 1 + 1) // 2)
-    rand_iters = max(0, len(rand_hist) - 1)
-    n_iters = min(adapt_iters, rand_iters)
-
-    labeled_batch = MODEL_CONFIG.get("num_data", None)
-
-    lines = []
-    lines.append("PER-ITERATION POINT USAGE TABLE")
-    lines.append("=" * 50)
-    lines.append("")
-    lines.append(
-        f"{'Iter':>4} | {'LabeledDatasetSize':>18} | {'LabeledBatchSize':>16} | {'AdaptiveInterior':>16} | {'RandomInterior':>14} | {'Match':>5}"
-    )
-    lines.append("-" * 90)
-
-    for i in range(1, n_iters + 1):
-        # Map iteration i -> adaptive index 1 + 2*(i-1); random index i
-        adapt_idx = 1 + 2 * (i - 1)
-        rand_idx = i
-        adapt_interior = adapt_hist[adapt_idx]
-        rand_interior = rand_hist[rand_idx]
-        match = "yes" if adapt_interior == rand_interior else "no"
-        lines.append(
-            f"{i:>4} | {dataset_size:>18} | {labeled_batch if labeled_batch is not None else 'N/A':>16} | {adapt_interior:>16} | {rand_interior:>14} | {match:>5}"
+    method_names = sorted(trained_models)
+    histories = {
+        method_name: list(
+            getattr(trained_models[method_name], "iteration_point_count_history", []) or []
         )
-
-    lines.append("")
-    lines.append("Notes:")
-    lines.append(
-        "- LabeledDatasetSize is the total FEM data points shared by both methods."
-    )
-    lines.append(
-        "- LabeledBatchSize is the per-step sample size used in loss_data for both methods."
-    )
-    lines.append(
-        "- AdaptiveInterior and RandomInterior are the number of PDE residual points per iteration."
-    )
-    lines.append(
-        "- Adaptive values use indices 1,3,5,... to avoid duplicates stored per iteration."
+        for method_name in method_names
+    }
+    num_iterations = max((len(values) for values in histories.values()), default=0)
+    labeled_batch = next(
+        (
+            getattr(model, "num_data", None)
+            for model in trained_models.values()
+            if getattr(model, "num_data", None) is not None
+        ),
+        "N/A",
     )
 
-    with open(save_path, "w") as f:
-        f.write("\n".join(lines))
+    header_cells = ["Iter", "LabeledDatasetSize", "LabeledBatchSize"] + [
+        f"{_method_label(method_name)}Interior" for method_name in method_names
+    ]
+    widths = [6, 18, 18] + [max(18, len(cell) + 2) for cell in header_cells[3:]]
+
+    def _format_row(values: list[object]) -> str:
+        return " | ".join(str(value).rjust(width) for value, width in zip(values, widths))
+
+    lines = ["PER-ITERATION POINT USAGE TABLE", "=" * 50, "", _format_row(header_cells)]
+    lines.append("-" * len(lines[-1]))
+
+    for iteration in range(num_iterations):
+        row = [iteration + 1, dataset_size, labeled_batch]
+        for method_name in method_names:
+            history = histories[method_name]
+            row.append(history[iteration] if iteration < len(history) else "N/A")
+        lines.append(_format_row(row))
+
+    lines.extend(
+        [
+            "",
+            "Notes:",
+            "- LabeledDatasetSize is the shared FEM supervision set size.",
+            "- LabeledBatchSize is the shared supervised batch size used in loss_data.",
+            "- Method columns report PDE residual collocation counts per iteration.",
+        ]
+    )
+
+    with open(save_path, "w") as file_obj:
+        file_obj.write("\n".join(lines))
     print(f"Point usage table saved to {save_path}")
 
 
@@ -1404,3 +1143,194 @@ def create_detailed_visualizations(
     plt.close()  # Always close to prevent interactive display
 
     print(f"Detailed comparison saved to {detailed_path}")
+
+
+def _iter_image_sequence(folder_path: str, prefix: str) -> list[str]:
+    try:
+        files = [
+            file_name
+            for file_name in os.listdir(folder_path)
+            if file_name.lower().startswith(prefix.lower())
+            and file_name.lower().endswith((".png", ".jpg", ".jpeg"))
+        ]
+    except FileNotFoundError:
+        return []
+
+    files.sort(
+        key=lambda value: (
+            int(value.split("_")[-1].split(".")[0])
+            if "_" in value and value.split("_")[-1].split(".")[0].isdigit()
+            else 0
+        )
+    )
+    return files
+
+
+def create_image_sequence_gif(
+    folder_path: str,
+    prefix: str,
+    output_filename: str,
+    *,
+    description: str,
+    duration: int | None = None,
+    loop: int | None = None,
+    cleanup_pngs: bool = True,
+):
+    """Create a GIF from a prefixed image sequence when files are available."""
+    if duration is None:
+        duration = VIZ_CONFIG["gif_duration"]
+    if loop is None:
+        loop = VIZ_CONFIG["gif_loop"]
+
+    image_files = _iter_image_sequence(folder_path, prefix)
+    if not image_files:
+        print(f"No images found for {prefix}; GIF creation skipped")
+        return
+
+    images = []
+    for file_name in image_files:
+        image_path = os.path.join(folder_path, file_name)
+        try:
+            images.append(Image.open(image_path))
+        except Exception as exc:
+            print(f"Warning: Could not load image {image_path}: {exc}")
+
+    if not images:
+        print(f"No loadable images found for {prefix}; GIF creation skipped")
+        return
+
+    output_path = os.path.join(folder_path, output_filename)
+    try:
+        images[0].save(
+            output_path,
+            save_all=True,
+            append_images=images[1:],
+            duration=duration,
+            loop=loop,
+        )
+        print(f"GIF created: {output_path}")
+        print(f"  {description} over {len(images)} iterations")
+    except Exception as exc:
+        print(f"Error creating GIF {output_filename}: {exc}")
+        return
+
+    if cleanup_pngs:
+        for file_name in image_files:
+            png_path = os.path.join(folder_path, file_name)
+            try:
+                os.remove(png_path)
+            except Exception as exc:
+                print(f"Warning: Could not remove {file_name}: {exc}")
+
+
+def create_multi_method_visualizations(
+    trained_models: dict,
+    dataset_size: int,
+    output_dir: str | None = None,
+    include_gifs: bool = False,
+    cleanup_pngs: bool = True,
+):
+    """Create the canonical visualization/report bundle for multi-method runs."""
+    if output_dir is None:
+        output_dir = images_dir()
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(reports_dir(), exist_ok=True)
+
+    print("Creating multi-method visualizations...")
+
+    plot_multi_method_comparison(
+        trained_models,
+        "total_error_history",
+        os.path.join(output_dir, "error_integral_comparison.png"),
+        title="Integrated error vs iteration",
+        ylabel="Integrated error ∫Ω (u-u_ref)^2 dΩ",
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "total_error_rms_history",
+        os.path.join(output_dir, "fixed_error_rms_comparison.png"),
+        title="Fixed reference-mesh RMS error",
+        ylabel="RMS error (sqrt(mean((u-u_ref)^2)))",
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "fixed_rms_residual_history",
+        os.path.join(output_dir, "fixed_residual_comparison.png"),
+        title="Fixed reference-mesh RMS residual",
+        ylabel="RMS residual (sqrt(mean(r^2)))",
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "fixed_total_residual_history",
+        os.path.join(output_dir, "fixed_residual_integral_comparison.png"),
+        title="Fixed reference-mesh residual integral",
+        ylabel="∫Ω r(x)^2 dΩ",
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "iteration_point_count_history",
+        os.path.join(output_dir, "point_count_comparison.png"),
+        title="Residual points vs iteration",
+        ylabel="Number of residual points",
+        logy=False,
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "cumulative_runtime_history",
+        os.path.join(output_dir, "runtime_comparison.png"),
+        title="Cumulative runtime vs iteration",
+        ylabel="Runtime (s)",
+        logy=False,
+    )
+
+    summary_path = os.path.join(reports_dir(), "performance_summary.txt")
+    create_multi_method_performance_summary(trained_models, summary_path)
+
+    point_usage_path = os.path.join(reports_dir(), "point_usage_table.txt")
+    create_multi_method_point_usage_table(
+        trained_models, dataset_size=dataset_size, save_path=point_usage_path
+    )
+
+    for method_name, model in sorted(trained_models.items()):
+        plot_training_convergence_simple(
+            model,
+            _method_label(method_name),
+            os.path.join(output_dir, f"{method_name}_training_convergence.png"),
+        )
+
+    if include_gifs:
+        if "adaptive" in trained_models:
+            create_image_sequence_gif(
+                output_dir,
+                "residuals_",
+                "adaptive_residual_evolution.gif",
+                description="Adaptive residual evolution",
+                cleanup_pngs=cleanup_pngs,
+            )
+        if "random" in trained_models:
+            create_image_sequence_gif(
+                output_dir,
+                "random_residuals_",
+                "random_residual_evolution.gif",
+                description="Random residual evolution",
+                cleanup_pngs=cleanup_pngs,
+            )
+            create_image_sequence_gif(
+                output_dir,
+                "random_errors_",
+                "random_error_evolution.gif",
+                description="Random error evolution",
+                cleanup_pngs=cleanup_pngs,
+            )
+        if "adaptive" in trained_models and set(trained_models).issubset(
+            {"adaptive", "random"}
+        ):
+            create_image_sequence_gif(
+                output_dir,
+                "errors_",
+                "adaptive_error_evolution.gif",
+                description="Adaptive error evolution",
+                cleanup_pngs=cleanup_pngs,
+            )
+
+    print(f"Multi-method visualizations saved to {output_dir}")

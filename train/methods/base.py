@@ -7,7 +7,7 @@ and mesh refinement strategies.
 
 from abc import ABC, abstractmethod
 import torch
-from typing import Tuple, Optional, Any, List
+from typing import Tuple, Optional, Any
 
 
 class TrainingMethod(ABC):
@@ -44,7 +44,6 @@ class TrainingMethod(ABC):
         """
         pass
 
-    @abstractmethod
     def refine_mesh(
         self, mesh: Any, model: Any, iteration: int = 0
     ) -> Tuple[Any, bool]:
@@ -59,7 +58,7 @@ class TrainingMethod(ABC):
             Tuple of (new_mesh, was_refined) where was_refined indicates
             if any refinement was performed
         """
-        pass
+        return mesh, False
 
     def should_refine(self, iteration: int, max_iterations: int) -> bool:
         """Check if refinement should happen at this iteration.

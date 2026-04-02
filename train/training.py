@@ -4,7 +4,7 @@ Contains functions for training neural networks and managing optimizers.
 """
 
 import torch
-from config import DEVICE, TRAINING_CONFIG
+from config import TRAINING_CONFIG
 
 
 def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
@@ -40,15 +40,19 @@ def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
     else:
         raise ValueError(f"Unsupported optimizer: {optimizer}")
 
-    print(f"Training with {optimizer} optimizer for {epochs} epochs...")
+    num_steps = max(int(epochs), 0)
+    print(f"Training with {optimizer} optimizer for {num_steps} epochs...")
 
-    # Training loop
-    for epoch in range(epochs + 1):
+    if num_steps == 0:
+        return
+
+    # Training loop: run exactly the configured number of optimizer steps.
+    for epoch in range(1, num_steps + 1):
         # Use closure function for optimization step
         model.optimizer.step(lambda: model.closure(dataset))
 
         # Track progress and accumulate loss data for plotting
-        if epoch % 1000 == 0:
+        if epoch == 1 or epoch % 1000 == 0 or epoch == num_steps:
             loss_interior, loss_data, loss_bc = model.compute_losses(dataset)
             total_loss = (
                 model.w_data * loss_data

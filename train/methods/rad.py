@@ -13,6 +13,7 @@ import torch
 import numpy as np
 from typing import Tuple, Optional, Any
 from .base import TrainingMethod
+from .sampling import points_to_tensors, sample_points_in_domain
 
 
 class RADMethod(TrainingMethod):
@@ -89,27 +90,19 @@ class RADMethod(TrainingMethod):
         """
         x_min, x_max, y_min, y_max = self.domain_bounds
 
-        valid_points = []
-        max_attempts = max(5000, self.num_candidates * 20)
-        attempts = 0
-
-        while len(valid_points) < self.num_candidates and attempts < max_attempts:
-            x = self._rng.uniform(x_min, x_max)
-            y = self._rng.uniform(y_min, y_max)
-
-            try:
-                if mesh(x, y).nr != -1:
-                    valid_points.append((x, y))
-            except Exception:
-                pass
-            attempts += 1
-
-        if len(valid_points) < self.num_candidates:
-            print(
-                f"Warning: Generated {len(valid_points)}/{self.num_candidates} candidate points"
-            )
-
-        return np.array(valid_points)
+        return sample_points_in_domain(
+            mesh,
+            self.num_candidates,
+            lambda batch_size: np.column_stack(
+                (
+                    self._rng.uniform(x_min, x_max, size=batch_size),
+                    self._rng.uniform(y_min, y_max, size=batch_size),
+                )
+            ),
+            batch_size=max(512, self.num_candidates // 2),
+            max_batches=40,
+            warn_label="candidate points",
+        )
 
     def _compute_residual_weights(
         self, candidate_points: np.ndarray, model: Any
@@ -218,20 +211,7 @@ class RADMethod(TrainingMethod):
             self._last_resample_iteration = iteration
 
         points = self._cached_points
-        x = torch.tensor(points[:, 0], dtype=torch.float32)
-        y = torch.tensor(points[:, 1], dtype=torch.float32)
-
-        return x, y
-
-    def refine_mesh(
-        self, mesh: Any, model: Any, iteration: int = 0
-    ) -> Tuple[Any, bool]:
-        """No mesh refinement for RAD - point selection is via resampling.
-
-        Returns:
-            (mesh, False) - mesh unchanged
-        """
-        return mesh, False
+        return points_to_tensors(points)
 
     def get_element_errors(self, mesh: Any, model: Any) -> np.ndarray:
         """Compute element-wise residual errors for visualization.

@@ -10,6 +10,7 @@ import numpy as np
 from typing import Tuple, Optional, Any
 from ngsolve import GridFunction, BaseVector, Integrate, VOL, H1
 from .base import TrainingMethod
+from config import DEVICE
 
 
 class AdaptiveMethod(TrainingMethod):
@@ -77,7 +78,12 @@ class AdaptiveMethod(TrainingMethod):
         mesh_x, mesh_y = mesh_coords.unbind(1)
 
         # Compute PDE residuals at mesh points
-        res = model.PDE_residual(mesh_x, mesh_y).detach().numpy()
+        res = (
+            model.PDE_residual(mesh_x.to(DEVICE), mesh_y.to(DEVICE))
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
         # Create FE space for residual interpolation
         fe_space = H1(mesh, order=1, dirichlet=".*")
@@ -118,7 +124,7 @@ class AdaptiveMethod(TrainingMethod):
         coords = export_vertex_coordinates(mesh)
         mesh_x, mesh_y = coords.unbind(1)
 
-        res = model.PDE_residual(mesh_x, mesh_y).detach()
+        res = model.PDE_residual(mesh_x.to(DEVICE), mesh_y.to(DEVICE)).detach()
         return res**2
 
     def log_iteration(self, iteration: int, mesh: Any, model: Any) -> dict:
@@ -131,7 +137,7 @@ class AdaptiveMethod(TrainingMethod):
 
             coords = export_vertex_coordinates(mesh)
             mesh_x, mesh_y = coords.unbind(1)
-            res = model.PDE_residual(mesh_x, mesh_y).detach()
+            res = model.PDE_residual(mesh_x.to(DEVICE), mesh_y.to(DEVICE)).detach()
 
             base_log.update(
                 {

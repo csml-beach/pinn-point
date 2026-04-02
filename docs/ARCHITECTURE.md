@@ -6,21 +6,21 @@
 
 **PINN-Point** is a research project comparing Physics-Informed Neural Networks (PINNs) trained with:
 - **Adaptive mesh refinement** — concentrates collocation points in high-residual regions
-- **Random sampling** — uniform random point selection (baseline)
+- **Baseline and competitive samplers** — including random, low-discrepancy, and residual-based fixed-mesh methods
 
-The key innovation is a **fair comparison**: both methods share the same labeled FEM data, isolating the effect of collocation point selection.
+The core experiment idea is a **fair comparison**: all methods share the same labeled FEM data, reference solution, initial weights, and point-budget schedule, isolating the effect of collocation point selection and refinement policy. The active comparison policy also uses the same configured training budget per iteration for every method, disables adaptive-only bonus training, and records runtime with method-specific sampling/refinement overhead included.
 
 ## Directory Structure
 
 ```
 pinn-point/
 ├── train/                    # Core Python modules
-│   ├── main.py              # CLI entrypoint (main, test, hparams, cleanup, ablate-plot)
+│   ├── main.py              # CLI entrypoint (main, smoke, hparams, cleanup, cleanup-all, ablate-plot)
 │   ├── experiments.py       # Experiment orchestration
 │   ├── pinn_model.py        # FeedForward neural network class
 │   ├── training.py          # Model training, optimizer setup
 │   ├── mesh_refinement.py   # Adaptive refinement logic
-│   ├── visualization.py     # Plots, GIFs, CSV export
+│   ├── visualization.py     # Plots, summaries, CSV export
 │   ├── geometry.py          # NGSolve geometry, mesh utilities
 │   ├── fem_solver.py        # FEM solver, dataset creation
 │   ├── config.py            # All configuration dictionaries
@@ -34,7 +34,11 @@ pinn-point/
 │       ├── __init__.py      # Method registry, get_method()
 │       ├── base.py          # Abstract TrainingMethod class
 │       ├── adaptive.py      # Residual-based adaptive refinement
-│       └── random.py        # Uniform random sampling
+│       ├── random.py        # Uniform random sampling
+│       ├── random_r.py      # Random-R periodic resampling
+│       ├── quasi_random.py  # Halton and Sobol low-discrepancy methods
+│       ├── rad.py           # Residual-based Adaptive Distribution
+│       └── sampling.py      # Shared point-sampling helpers
 ├── notebooks/               # Jupyter notebooks for exploration
 ├── docs/                    # Documentation (CSV format, parameter study)
 ├── outputs/                 # Generated experiment outputs (gitignored)
@@ -50,11 +54,12 @@ pinn-point/
 ```
 
 **CLI Commands**:
-- `main` — Run full adaptive vs random comparison
-- `test` — Quick test run
+- `main` — Run the default experiment configuration
+- `smoke` — Run a minimal end-to-end smoke test
 - `hparams` — Hyperparameter study
 - `ablate-plot` — Generate ablation summary plots
 - `cleanup` — Remove generated artifacts
+- `cleanup-all` — Remove temporary files from `outputs/`
 
 ## Key Configuration (train/config.py)
 
@@ -147,22 +152,24 @@ METHOD_REGISTRY["your_method"] = YourMethod
 
 **Boundary Conditions**: Dirichlet $u = 0$ on bottom boundary
 
-**Implementation locations** (legacy, will be refactored):
-- `train/pinn_model.py`: `PDE_residual()`, `loss_boundary_condition()`
-- `train/fem_solver.py`: `solve_FEM()`
-- `train/problems/poisson.py`: New modular implementation
+**Active implementation locations**:
+- `train/problems/poisson.py`: Poisson residual, boundary loss, FEM solve, and mesh creation
+- `train/pinn_model.py`: delegates residual and boundary loss through the active `problem`
+- `train/fem_solver.py`: thin helpers that call `problem.solve_fem(...)`
+
+The problem abstraction is now on the active training path, but the Poisson problem is still the only built-in PDE and some backend-sensitive FEM details remain under active cleanup.
 
 ## Data Flow
 
 ```
-1. create_initial_mesh()     → NGSolve mesh
-2. solve_FEM(mesh)           → Reference FEM solution (gfu, fes)
-3. create_dataset()          → PyTorch dataset of (coords, solution)
-4. FeedForward(mesh_x, mesh_y) → PINN model
-5. train_model()             → Train on dataset + PDE loss
-6. refine_mesh() or get_random_points() → New collocation points
-7. Repeat 5-6 for N iterations
-8. Export visualizations, CSVs, GIFs
+1. `problem.make_mesh()`     → NGSolve mesh
+2. `problem.solve_fem(mesh)` → Reference FEM solution (gfu, fes)
+3. `create_dataset()`        → PyTorch dataset of `(coords, solution)`
+4. `FeedForward(...)`        → PINN model with active `problem`
+5. `train_model()`           → Train on supervised data + PDE/boundary loss
+6. `method.refine_mesh()` or `method.get_collocation_points()` → New collocation set
+7. Repeat for `N` iterations with shared evaluation metrics
+8. Export canonical reports and comparison plots
 ```
 
 ## Important Functions
@@ -170,47 +177,44 @@ METHOD_REGISTRY["your_method"] = YourMethod
 | Function | Location | Purpose |
 |----------|----------|---------|
 | `export_vertex_coordinates(mesh)` | geometry.py | Extract mesh vertices as tensor |
-| `ngsolve_to_pyvista()` | visualization.py | Convert mesh for 3D viz (uses temp dir) |
+| `create_multi_method_visualizations()` | visualization.py | Generate the canonical report bundle |
 | `run_adaptive_training_fair()` | experiments.py | Main adaptive experiment |
-| `run_random_training_fair()` | experiments.py | Main random experiment |
+| `run_method_training_fair()` | experiments.py | Main non-adaptive method runner |
+| `run_complete_experiment()` | experiments.py | Shared multi-method experiment entrypoint |
 | `compute_model_error()` | mesh_refinement.py | Error vs reference solution |
 
 ## Experiment Outputs
 
 Each run creates `outputs/<timestamp>_<name>/`:
 ```
-├── images/           # PNG plots, GIF animations
-├── reports/          # histories.csv, metadata.json
+├── images/           # comparison plots and per-method convergence figures
+├── reports/          # all_methods_histories.csv, run_config.json, summaries
 ├── checkpoints/      # Model weights (optional)
 └── artifacts/        # Additional outputs
 ```
+
+Canonical report artifacts:
+- `reports/all_methods_histories.csv`
+- `reports/performance_summary.txt`
+- `reports/point_usage_table.txt`
+- `reports/run_config.json`
 
 ## Files to Never Commit
 
 Already in `.gitignore`:
 - `outputs/`, `backup/` — Experiment results
-- `images/`, `train/images/` — Generated plots
 - `*.vtu`, `*.vtk`, `vtk_export*` — VTK mesh files
-- `reports/` — Generated logs
 
 ## Known Issues / Tech Debt
 
 See [docs/todo.md](/Users/arash/Documents/GitHub/pinn-point/docs/todo.md) for the active follow-up list.
 
-## TODO / Follow-ups
-
-- [ ] Fix the residual quadrature path in `train/mesh_refinement.py`: `compute_model_residual_on_reference_quadrature()` still tries `reference_mesh.Elements2D()` and falls back to Monte Carlo on the current netgen/ngsolve backend. Replace that with a stable mesh traversal or integration path so the evaluation is backend-safe and deterministic.
-
 ## Testing Changes
 
 ```bash
-cd /Users/arash/Documents/GitHub/pinn-point/train
-~/.pyenv/versions/netgen/bin/python -c "
-from problems import get_problem, list_problems
-from methods import get_method, list_methods
-print('Problems:', list_problems())
-print('Methods:', list_methods())
-"
+cd /Users/arash/Documents/GitHub/pinn-point
+~/.pyenv/versions/netgen/bin/python -m py_compile train/*.py train/problems/*.py train/methods/*.py
+scripts/smoke_test.sh --seed 123
 ```
 
 ## Dependencies

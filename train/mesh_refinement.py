@@ -5,14 +5,13 @@ Contains functions for adaptive mesh refinement based on PINN residuals and erro
 
 import torch
 import numpy as np
-import os
 
 # Explicit ngsolve imports for static analyzers and clarity
 from ngsolve import GridFunction, BaseVector, Integrate, VOL, BND
 from geometry import export_vertex_coordinates
 from fem_solver import solve_FEM
 from training import train_model
-from config import DEVICE, DIRECTORY, MESH_CONFIG
+from config import DEVICE, MESH_CONFIG, TRAINING_CONFIG
 import math
 
 
@@ -400,10 +399,6 @@ def compute_model_error(
     u_pinn_on_ref = GridFunction(reference_fes)
     u_pinn_on_ref.vec[:] = BaseVector(u_pred.flatten())
 
-    # Ensure output directory exists
-    if not os.path.exists(DIRECTORY):
-        os.makedirs(DIRECTORY)
-
     # Compute squared error against reference solution
     error = (u_pinn_on_ref - reference_solution) * (u_pinn_on_ref - reference_solution)
 
@@ -479,7 +474,7 @@ def refine_mesh(model, fe_space, mesh, export_images=False, iteration=None):
         None (modifies mesh in-place and updates model)
     """
     # Compute PDE residuals at mesh points
-    res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().numpy()
+    res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().cpu().numpy()
 
     # Create GridFunction with residuals
     residuals = GridFunction(fe_space)
@@ -518,14 +513,13 @@ def refine_mesh(model, fe_space, mesh, export_images=False, iteration=None):
 
     # Update mesh coordinates in model
     mesh_x, mesh_y = export_vertex_coordinates(mesh).unbind(1)
-    model.mesh_x = mesh_x
-    model.mesh_y = mesh_y
+    model.set_mesh_points(mesh_x, mesh_y)
 
     # Update mesh history
-    model.mesh_point_history.append((model.mesh_x.numpy(), model.mesh_y.numpy()))
-    model.mesh_point_count_history.append(len(model.mesh_x))
+    model.mesh_point_history.append(torch.stack([mesh_x, mesh_y], dim=1).clone())
+    model.mesh_point_count_history.append(len(mesh_x))
 
-    print(f"Mesh refined: {len(model.mesh_x)} points, Max Error: {maxerr:.6e}")
+    print(f"Mesh refined: {len(mesh_x)} points, Max Error: {maxerr:.6e}")
 
 
 def adapt_mesh_and_train(
@@ -563,17 +557,14 @@ def adapt_mesh_and_train(
     fe_space = H1(mesh, order=1, dirichlet=".*")
     model.fes = fe_space  # Store finite element space for residual computation
 
-    # Train PINN model
-    train_model(model, dataset, epochs)
-    # Fine-tune for a few extra epochs to stabilize after mesh changes
-    try:
-        base = epochs if isinstance(epochs, int) and epochs > 0 else 0
-        extra_epochs = max(1, int(0.2 * base)) if base > 0 else 1
-    except Exception:
-        extra_epochs = 1
-    if extra_epochs > 0:
-        print(f"Fine-tuning for {extra_epochs} extra epochs before evaluation")
-        train_model(model, dataset, extra_epochs)
+    # Train with the same explicit budget used by the baseline methods.
+    train_model(
+        model,
+        dataset,
+        epochs,
+        optimizer=TRAINING_CONFIG["optimizer"],
+        lr=TRAINING_CONFIG["lr"],
+    )
 
     # Compute model error against high-fidelity reference solution
     compute_model_error(
@@ -698,7 +689,7 @@ def compute_random_residuals(
         None (updates model residual history)
     """
     # Compute PDE residuals at random points
-    res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().numpy()
+    res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().cpu().numpy()
 
     # For random points, we need to interpolate residuals to the mesh for visualization
     # Create GridFunction and interpolate residuals from random points to mesh

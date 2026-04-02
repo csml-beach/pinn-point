@@ -1,69 +1,65 @@
 # Histories CSV: Columns and Definitions
 
-This document explains each column written by `reports/histories.csv` so you can interpret run outputs and aggregate results consistently.
+This document explains the canonical run-history CSV output so you can interpret experiment results and aggregate them consistently.
 
-Each row corresponds to an iteration index (starting at 0). Some methods may append values at slightly different cadence; when a value is missing for an iteration, it is recorded as `NaN`.
+Each row corresponds to one method at one iteration. Missing values are recorded as `NaN`.
 
-## Columns
+## `reports/all_methods_histories.csv`
 
-- iteration
-  - The iteration index for the experiment loop.
+This is the single source of truth for postprocessing and method comparisons.
 
-- adaptive_total_error
-  - Integrated error for the adaptive method: ∫Ω (u_adapt − u_ref)^2 dΩ.
-  - Computed on the fixed high-fidelity reference mesh by projecting the PINN prediction to the reference FE space and integrating.
+Each row corresponds to one method at one iteration.
 
-- random_total_error
-  - Integrated error for the random method: ∫Ω (u_rand − u_ref)^2 dΩ.
-  - Same evaluation procedure as the adaptive method for fairness.
+### Columns
 
-- adaptive_total_error_rms
-  - RMS error for the adaptive method: sqrt(mean((u_adapt − u_ref)^2)) evaluated at the reference-mesh vertices.
-  - DOF-agnostic alternative to the integrated error; no FE projection required.
+- `method`
+  - Method name written by the experiment runner.
 
-- random_total_error_rms
-  - RMS error for the random method: sqrt(mean((u_rand − u_ref)^2)) evaluated at the reference-mesh vertices.
+- `iteration`
+  - Iteration index for that method.
 
-- adaptive_total_residual
-  - Integrated PDE residual during training on the current mesh (∫Ω r^2) for the adaptive method.
-  - This is computed on the evolving training mesh and primarily used for refinement logic/tracking.
+- `total_error`
+  - Integrated solution error on the fixed reference mesh.
 
-- random_total_residual
-  - Integrated PDE residual during training (∫Ω r^2) for the random method on its sampling mesh/points.
+- `total_error_rms`
+  - RMS solution error at reference-mesh vertices.
 
-- adaptive_fixed_total_residual
-  - Fixed-grid integral of residual^2: ∫Ω r^2 dΩ for the adaptive method evaluated on the high-fidelity reference mesh.
-  - This provides a fair, mesh-independent residual metric for comparison.
+- `boundary_error`
+  - Integrated boundary error on the reference mesh.
 
-- random_fixed_total_residual
-  - Fixed-grid integral of residual^2 for the random method on the same reference mesh.
+- `total_residual`
+  - Training residual measured on the method's own current collocation mesh or points.
+  - Treat this primarily as a method-behavior diagnostic, not as the main fair comparison metric.
 
-- adaptive_fixed_boundary_residual
-  - Integrated boundary residual (∫∂Ω r_b^2) for the adaptive method on the reference mesh when available.
-  - May be `NaN` if boundary-only evaluation is not produced in a given iteration.
+- `fixed_total_residual`
+  - Fixed-grid integrated residual on the common reference mesh.
 
-- random_fixed_boundary_residual
-  - Integrated boundary residual for the random method on the reference mesh when available.
+- `fixed_boundary_residual`
+  - Fixed-grid boundary residual on the common reference mesh when available.
 
-- adaptive_fixed_rms_residual
-  - RMS residual for the adaptive method: sqrt(mean(r^2)) at the reference-mesh vertices.
-  - DOF-agnostic and comparable across methods.
+- `fixed_rms_residual`
+  - RMS residual on the common reference mesh.
+  - This is the preferred residual-based comparison metric across methods.
 
-- random_fixed_rms_residual
-  - RMS residual for the random method at the reference-mesh vertices.
+- `point_count`
+  - Number of collocation points used during that iteration.
+  - This is intended for error-vs-point-budget comparisons.
 
-## Notes
+- `iteration_runtime_sec`
+  - Wall-clock runtime for the full iteration.
+  - Includes method-specific point selection or mesh refinement, training, and evaluation.
 
-- RMS vs Integrated:
-  - Integrated metrics depend on FE projection/integration and reflect domain-weighted totals.
-  - RMS metrics are point-sampled at reference vertices, avoiding DOF/projection issues; use them for quick, fair comparisons.
+- `cumulative_runtime_sec`
+  - Cumulative wall-clock runtime through that iteration using the same full-iteration scope.
 
-- Missing values (NaN):
-  - If an evaluation step fails or a size mismatch occurs (e.g., FE DOF count vs vertex count), the pipeline records `NaN` and logs a warning.
+### Suggested Usage
 
-- Reproducibility:
-  - All metrics are computed against the same reference mesh to ensure a fair comparison between adaptive and random methods.
+- For main comparison plots:
+  - use `total_error` or `total_error_rms` against iteration, point count, and cumulative runtime.
 
-- Suggested usage:
-  - For publication plots, prefer the fixed-grid metrics (RMS residual and integrated residual) and present both the integrated and RMS error.
-  - Use training residuals to illustrate the behavior during refinement, but rely on fixed-grid metrics for cross-method fairness.
+- For residual plots:
+  - prefer `fixed_rms_residual`;
+  - use `fixed_total_residual` as a supporting integrated measure.
+
+- For method diagnostics:
+  - inspect `total_residual` to understand how each method behaves on its own training points or mesh.

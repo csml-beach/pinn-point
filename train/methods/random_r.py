@@ -9,6 +9,7 @@ import torch
 import numpy as np
 from typing import Tuple, Optional, Any
 from .base import TrainingMethod
+from .sampling import points_to_tensors, sample_points_in_domain
 
 
 class RandomResamplingMethod(TrainingMethod):
@@ -56,28 +57,18 @@ class RandomResamplingMethod(TrainingMethod):
         """
         x_min, x_max, y_min, y_max = self.domain_bounds
 
-        valid_points = []
-        max_attempts = max(1000, num_points * 20)
-        attempts = 0
-
-        while len(valid_points) < num_points and attempts < max_attempts:
-            x = self._rng.uniform(x_min, x_max)
-            y = self._rng.uniform(y_min, y_max)
-
-            try:
-                if mesh(x, y).nr != -1:
-                    valid_points.append((x, y))
-            except Exception:
-                pass
-            attempts += 1
-
-        if len(valid_points) < num_points:
-            print(f"Warning: Generated {len(valid_points)}/{num_points} random points")
-
-        if len(valid_points) == 0:
-            raise ValueError("Could not generate any valid random points in the domain")
-
-        return np.array(valid_points[:num_points])
+        return sample_points_in_domain(
+            mesh,
+            num_points,
+            lambda batch_size: np.column_stack(
+                (
+                    self._rng.uniform(x_min, x_max, size=batch_size),
+                    self._rng.uniform(y_min, y_max, size=batch_size),
+                )
+            ),
+            max_batches=20,
+            warn_label="random points",
+        )
 
     def get_collocation_points(
         self,
@@ -113,17 +104,4 @@ class RandomResamplingMethod(TrainingMethod):
         else:
             points = self._cached_points
 
-        x = torch.tensor(points[:, 0], dtype=torch.float32)
-        y = torch.tensor(points[:, 1], dtype=torch.float32)
-
-        return x, y
-
-    def refine_mesh(
-        self, mesh: Any, model: Any, iteration: int = 0
-    ) -> Tuple[Any, bool]:
-        """No mesh refinement for Random-R.
-
-        Returns:
-            (mesh, False) - mesh unchanged
-        """
-        return mesh, False
+        return points_to_tensors(points)

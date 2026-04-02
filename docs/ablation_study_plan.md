@@ -102,7 +102,7 @@ Key combinations from Wu et al.:
 
 #### Experiment 3: Resampling Period Study
 
-For `random_r` and `rad`, test resampling every N epochs:
+For `random_r` and `rad`, test resampling every N iterations:
 
 ```python
 for period in [1, 5, 10, 25, 50]:
@@ -117,22 +117,25 @@ Each run produces (in `outputs/<run_id>/`):
 
 | File | Location | Content |
 |------|----------|---------|
-| `all_methods_histories.csv` | `reports/` | Iteration-wise errors/point counts per method |
-| `histories.csv` | `reports/` | Legacy format for adaptive+random |
-| `errors_*.png` | `images/` | Error heatmaps per iteration |
-| `residuals_*.png` | `images/` | Residual heatmaps per iteration |
-| `meta.json` | root | Run metadata, config, seed |
+| `all_methods_histories.csv` | `reports/` | Canonical iteration-wise metrics per method |
+| `performance_summary.txt` | `reports/` | End-of-run comparison summary |
+| `point_usage_table.txt` | `reports/` | Per-iteration collocation budgets |
+| `run_config.json` | `reports/` | Run metadata, config, device, seed |
+| `*_comparison.png` | `images/` | Canonical comparison plots (error, residual, point count, runtime) |
+| `*_training_convergence.png` | `images/` | Per-method convergence plots |
+
+Optional per-iteration heatmaps and GIF inputs are only produced when image-heavy export paths are explicitly enabled.
 
 ### CSV Format: `all_methods_histories.csv`
 
 ```csv
-method,iteration,total_error,boundary_error,point_count
-adaptive,0,29225.83,59758.84,110
-adaptive,1,21964.00,46066.05,125
+method,iteration,total_error,total_error_rms,fixed_total_residual,fixed_rms_residual,point_count,iteration_runtime_sec,cumulative_runtime_sec
+adaptive,0,29225.83,16.30,17183.22,11.94,110,4.12,4.12
+adaptive,1,21964.00,14.10,12204.51,9.83,125,5.01,9.13
 ...
-halton,0,32271.45,65517.05,110
+halton,0,32271.45,17.21,19542.10,12.84,110,3.87,3.87
 ...
-rad,0,32289.49,65547.91,110
+rad,0,32289.49,17.19,18110.72,12.31,110,4.44,4.44
 ...
 ```
 

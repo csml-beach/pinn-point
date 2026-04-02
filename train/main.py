@@ -5,9 +5,40 @@ This is the entry point for running the complete experiment.
 
 import json
 import os
+import sys
+
+
+def _bootstrap_runtime_from_cli(argv):
+    device = None
+    remaining = [argv[0]]
+    i = 1
+
+    while i < len(argv):
+        if argv[i] == "--device":
+            if i + 1 >= len(argv):
+                raise SystemExit("error: --device requires a value")
+            device = argv[i + 1]
+            i += 2
+            continue
+        remaining.append(argv[i])
+        i += 1
+
+    mode = remaining[1].lower() if len(remaining) > 1 else None
+    if device is None and "PINN_DEVICE" not in os.environ and mode == "smoke":
+        device = "cpu"
+
+    if device is not None:
+        os.environ["PINN_DEVICE"] = device
+
+    return remaining
+
+
+if __name__ == "__main__":
+    sys.argv = _bootstrap_runtime_from_cli(sys.argv)
+
 
 from experiments import run_complete_experiment, run_hyperparameter_study
-from config import TRAINING_CONFIG, MESH_CONFIG, PROJECT_ROOT
+from config import DEVICE, TRAINING_CONFIG, MESH_CONFIG
 from utils import get_system_info, log_experiment_info, set_global_seed
 from paths import generate_run_id, set_active_run, write_run_metadata, OUTPUTS_ROOT
 from visualization import plot_ablation_error_shaded
@@ -141,7 +172,8 @@ def run_smoke_test(
     print(
         "Smoke configuration: "
         f"mesh_size={mesh_size}, iterations={num_adaptations}, epochs={epochs}, "
-        f"reference_mesh_factor={reference_mesh_factor}, methods={methods_to_run}"
+        f"reference_mesh_factor={reference_mesh_factor}, methods={methods_to_run}, "
+        f"device={DEVICE}"
     )
 
     try:
@@ -320,44 +352,6 @@ def main():
     return True
 
 
-def run_quick_test():
-    """Run a quick test with reduced parameters for debugging."""
-    print("Running quick test...")
-
-    # Set up a proper run for test mode
-    seed = _resolve_seed()
-    set_global_seed(seed)
-
-    run_id = generate_run_id(f"test-seed{seed}")
-    run_paths = set_active_run(run_id)
-    print(f"Test run ID: {run_id}")
-
-    try:
-        write_run_metadata(extra={"phase": "test", "seed": seed})
-
-        run_complete_experiment(
-            mesh_size=0.7,  # Coarser mesh for speed
-            num_adaptations=2,  # Fewer iterations for speed
-            epochs=100,  # Fewer epochs
-            export_images=False,
-            create_gifs=False,
-            generate_report=True,  # Enable to test visualizations
-            seed=seed,
-        )
-        print(f"Quick test completed successfully! Results: {run_paths['root']}")
-        return True
-
-    except Exception as e:
-        print(f"Quick test failed: {e}")
-        import traceback
-
-        traceback.print_exc()
-        return False
-
-
-## Removed run_parameter_study_example in favor of flexible hparams study
-
-
 def run_cleanup(run_id=None):
     """Clean up temporary files from a specific run or all runs.
 
@@ -400,38 +394,15 @@ def run_cleanup(run_id=None):
 
 
 def run_full_cleanup():
-    """Clean up all temporary files from outputs/ and legacy directories."""
-    import shutil
-
-    print("Cleaning up all temporary files...")
-    total_cleaned = 0
-
-    # Clean outputs/
-    run_cleanup()
-
-    # Clean legacy directories if they exist
-    legacy_dirs = [
-        os.path.join(PROJECT_ROOT, "images"),
-        os.path.join(PROJECT_ROOT, "reports"),
-    ]
-
-    for legacy_dir in legacy_dirs:
-        if os.path.exists(legacy_dir):
-            try:
-                shutil.rmtree(legacy_dir)
-                print(f"Removed legacy directory: {legacy_dir}")
-                total_cleaned += 1
-            except Exception as e:
-                print(f"Error removing {legacy_dir}: {e}")
-
-    print("Full cleanup completed")
-    return True
+    """Clean up temporary files from all run directories."""
+    print("Cleaning up all temporary files from outputs/...")
+    return run_cleanup()
 
 
 def run_ablation_summary_plot(run_ids):
     """Create shaded mean±std ablation plot from a list of run IDs.
 
-    Expects each run to have reports/histories.csv.
+    Expects each run to have reports/all_methods_histories.csv.
     """
     if not run_ids:
         print("No run IDs provided for ablation plot")
@@ -446,8 +417,6 @@ def run_ablation_summary_plot(run_ids):
 
 
 if __name__ == "__main__":
-    import sys
-
     def parse_seed_arg(args):
         """Extract --seed <value> from args list."""
         seed = None
@@ -468,9 +437,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         mode = sys.argv[1].lower()
 
-        if mode == "test":
-            success = run_quick_test()
-        elif mode == "smoke":
+        if mode == "smoke":
             seed_override, remaining = parse_seed_arg(sys.argv[2:])
             smoke_options = _parse_smoke_args(remaining)
             if seed_override is not None:
@@ -534,10 +501,13 @@ if __name__ == "__main__":
         else:
             print(
                 "Usage: python main.py "
-                "[main|smoke|test|hparams|cleanup|cleanup-all|ablate-plot]"
+                "[main|smoke|hparams|cleanup|cleanup-all|ablate-plot]"
             )
             print("")
             print("Commands:")
+            print("  Global options:")
+            print("               --device <name> Select runtime device")
+            print("                              Examples: cpu, cuda, cuda:0, auto")
             print("  main         Run full experiment (default)")
             print("               --seed <int>   Override random seed")
             print("  smoke        Run a minimal end-to-end smoke test")
@@ -551,14 +521,13 @@ if __name__ == "__main__":
             )
             print("               --problem <name>    Problem name")
             print("               --problem-kwargs '{...}'  Inline JSON kwargs")
-            print("  test         Run quick test with reduced parameters")
             print("  hparams      Run hyperparameter study")
             print("               [grid.json]    Path to JSON grid file")
             print("               ['{...}']      Inline JSON grid")
             print("               --images       Export images for each run")
             print("  cleanup      Clean up temporary files from outputs/")
             print("               [run-id]       Clean specific run only")
-            print("  cleanup-all  Clean up all temp files including legacy dirs")
+            print("  cleanup-all  Clean up all temp files from outputs/")
             print("  ablate-plot  Generate shaded ablation plot")
             print("               <run-id> ...   One or more run IDs to aggregate")
             success = False

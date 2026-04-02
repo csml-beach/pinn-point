@@ -12,6 +12,7 @@ fi
 export MPLBACKEND="${MPLBACKEND:-Agg}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/pinn-point-mpl}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/pinn-point-xdg-cache}"
+export PINN_DEVICE="${PINN_DEVICE:-cpu}"
 mkdir -p "$MPLCONFIGDIR" "$XDG_CACHE_HOME"
 
 if [[ -z "${FONTCONFIG_PATH:-}" && -d "/opt/homebrew/etc/fonts" ]]; then

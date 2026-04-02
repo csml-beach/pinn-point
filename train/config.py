@@ -10,13 +10,54 @@ import warnings
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
-# Device configuration
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# Directory configuration
+def _resolve_device_from_env():
+    requested = os.environ.get("PINN_DEVICE", "auto").strip() or "auto"
+    lowered = requested.lower()
+
+    if lowered == "auto":
+        if torch.cuda.is_available():
+            return requested, torch.device("cuda:0")
+        return requested, torch.device("cpu")
+
+    if lowered == "cpu":
+        return requested, torch.device("cpu")
+
+    if lowered == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError(
+                "PINN_DEVICE requested 'mps' but PyTorch MPS is not available"
+            )
+        return requested, torch.device("mps")
+
+    try:
+        device = torch.device(requested)
+    except Exception as exc:
+        raise RuntimeError(f"Invalid PINN_DEVICE value '{requested}'") from exc
+
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"PINN_DEVICE requested '{requested}' but CUDA is not available"
+            )
+        if device.index is not None and device.index >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"PINN_DEVICE requested '{requested}' but only "
+                f"{torch.cuda.device_count()} CUDA device(s) are available"
+            )
+
+    return requested, device
+
+
+# Device configuration
+REQUESTED_DEVICE, DEVICE = _resolve_device_from_env()
+RUNTIME_CONFIG = {
+    "requested_device": REQUESTED_DEVICE,
+    "active_device": str(DEVICE),
+}
+
+# Project configuration
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
-DIRECTORY = os.path.join(PROJECT_ROOT, "images")
-REPORTS_DIRECTORY = os.path.join(PROJECT_ROOT, "reports")
 
 # Model hyperparameters
 MODEL_CONFIG = {

@@ -1,12 +1,14 @@
 # Parameter and Hyperparameter Study
 
-This document explains how to run parameter sweeps in this project to study how different settings affect performance of adaptive vs random PINN training.
+This document explains how to run parameter sweeps in this project to study how different settings affect performance across the current multi-method PINN comparison stack.
 
 ## What it does
 - Runs multiple experiments with different configuration values.
 - Creates an isolated per-run folder at `outputs/<run-id>/` with:
   - `images/` plots (if enabled)
-  - `reports/histories.csv` for postprocessing
+  - `reports/all_methods_histories.csv` for postprocessing
+  - `reports/performance_summary.txt` for end-of-run comparison metrics
+  - `reports/point_usage_table.txt` for per-iteration point budgets
   - `reports/run_config.json` with configs, system, git metadata, and seed
 - You can aggregate multiple runs into a shaded mean±std error plot.
 
@@ -62,7 +64,7 @@ Notes:
 ---
 
 ## Postprocessing: ablation plot
-Aggregate multiple runs into a shaded mean±std error plot (requires each run to have `reports/histories.csv`).
+Aggregate multiple runs into a shaded mean±std error plot (requires each run to have `reports/all_methods_histories.csv`).
 
 Using the 7 most recent hparams runs:
 ```bash
@@ -74,7 +76,7 @@ python3 train/main.py ablate-plot $(find outputs -mindepth 1 -maxdepth 1 -type d
 ```
 Filter by pattern:
 ```bash
-python3 train/main.py ablate-plot $(find outputs -mindepth 1 -maxdepth 1 -type d -name '*adapt-vs-rand*' -exec basename {} \;)
+python3 train/main.py ablate-plot $(find outputs -mindepth 1 -maxdepth 1 -type d -name '*hps*' -exec basename {} \;)
 ```
 
 The plot is saved to `outputs/ablation_summary/ablation_error_shaded.png`.
@@ -84,4 +86,5 @@ The plot is saved to `outputs/ablation_summary/ablation_error_shaded.png`.
 ## Tips
 - To limit total runs, keep the grid small (Cartesian product grows quickly).
 - Use `--images` only when you need figures; it saves time to skip during large sweeps.
+- The canonical comparison metrics live in `reports/all_methods_histories.csv`; use that file instead of ad hoc per-method exports.
 - If PyVista/NGSolve are not installed, 3D exports are skipped with warnings; core training still runs.

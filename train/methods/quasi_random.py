@@ -9,6 +9,7 @@ import torch
 import numpy as np
 from typing import Tuple, Optional, Any
 from .base import TrainingMethod
+from .sampling import points_to_tensors, sample_points_in_domain
 
 try:
     from scipy.stats import qmc
@@ -66,46 +67,27 @@ class QuasiRandomMethod(TrainingMethod):
         x_range = x_max - x_min
         y_range = y_max - y_min
 
-        valid_points = []
         batch_size = num_points * 4  # Oversample to account for rejection
         offset = 0
-        max_batches = 50
-        batches = 0
 
-        while len(valid_points) < num_points and batches < max_batches:
-            # Create fresh sampler with offset seed for each batch
+        def batch_generator(size: int) -> np.ndarray:
+            nonlocal offset
             sampler = self._create_sampler(self.seed + offset)
-
-            # Generate points in [0, 1]^2, then scale to domain
-            unit_points = sampler.random(batch_size)
+            unit_points = sampler.random(size)
             scaled_points = np.empty_like(unit_points)
             scaled_points[:, 0] = unit_points[:, 0] * x_range + x_min
             scaled_points[:, 1] = unit_points[:, 1] * y_range + y_min
+            offset += size
+            return scaled_points
 
-            # Rejection sampling: keep only points inside mesh
-            for x, y in scaled_points:
-                try:
-                    if mesh(x, y).nr != -1:
-                        valid_points.append((x, y))
-                        if len(valid_points) >= num_points:
-                            break
-                except Exception:
-                    pass
-
-            offset += batch_size
-            batches += 1
-
-        if len(valid_points) < num_points:
-            print(
-                f"Warning: Generated {len(valid_points)}/{num_points} quasi-random points"
-            )
-
-        if len(valid_points) == 0:
-            raise ValueError(
-                "Could not generate any valid quasi-random points in the domain"
-            )
-
-        return np.array(valid_points[:num_points])
+        return sample_points_in_domain(
+            mesh,
+            num_points,
+            batch_generator,
+            batch_size=batch_size,
+            max_batches=50,
+            warn_label="quasi-random points",
+        )
 
     def get_collocation_points(
         self,
@@ -139,20 +121,7 @@ class QuasiRandomMethod(TrainingMethod):
             self._cached_points = points
             self._cached_num_points = num_points
 
-        x = torch.tensor(points[:, 0], dtype=torch.float32)
-        y = torch.tensor(points[:, 1], dtype=torch.float32)
-
-        return x, y
-
-    def refine_mesh(
-        self, mesh: Any, model: Any, iteration: int = 0
-    ) -> Tuple[Any, bool]:
-        """No mesh refinement for quasi-random methods.
-
-        Returns:
-            (mesh, False) - mesh unchanged
-        """
-        return mesh, False
+        return points_to_tensors(points)
 
 
 class HaltonMethod(QuasiRandomMethod):

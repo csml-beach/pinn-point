@@ -26,12 +26,19 @@ class FeedForward(nn.Module):
 
         # History tracking
         self.total_error_history = []
+        self.total_error_rms_history = []
         self.boundary_error_history = []
         self.train_loss_history = []
         self.total_residual_history = []
         self.boundary_residual_history = []
+        self.fixed_total_residual_history = []
+        self.fixed_boundary_residual_history = []
+        self.fixed_rms_residual_history = []
         self.mesh_point_history = []
         self.mesh_point_count_history = []
+        self.iteration_point_count_history = []
+        self.iteration_runtime_history = []
+        self.cumulative_runtime_history = []
 
         # Training components
         self.optimizer = None
@@ -58,9 +65,38 @@ class FeedForward(nn.Module):
         nn.init.xavier_uniform_(self.b2.weight)
         nn.init.xavier_uniform_(self.b3.weight)
 
-        # Store mesh coordinates
-        self.mesh_x = mesh_x
-        self.mesh_y = mesh_y
+        # Store mesh coordinates as buffers so model.to(DEVICE) moves them too.
+        self.register_buffer("mesh_x", torch.empty(0, dtype=torch.float32))
+        self.register_buffer("mesh_y", torch.empty(0, dtype=torch.float32))
+        self.set_mesh_points(mesh_x, mesh_y)
+
+        # Cache the training dataset on the active device once per model.
+        self._cached_dataset_id = None
+        self._cached_dataset_xy = None
+        self._cached_dataset_u = None
+
+    def set_mesh_points(self, mesh_x, mesh_y):
+        """Update collocation points on the configured runtime device."""
+        self.mesh_x = torch.as_tensor(mesh_x, dtype=torch.float32, device=DEVICE)
+        self.mesh_y = torch.as_tensor(mesh_y, dtype=torch.float32, device=DEVICE)
+
+    def _get_cached_dataset_tensors(self, dataset):
+        """Move the static supervised dataset to the active device once."""
+        if self._cached_dataset_id != id(dataset):
+            if hasattr(dataset, "tensors") and len(dataset.tensors) == 2:
+                xy, u = dataset.tensors
+            else:
+                xy, u = dataset[:]
+
+            self._cached_dataset_xy = torch.as_tensor(
+                xy, dtype=torch.float32, device=DEVICE
+            )
+            self._cached_dataset_u = torch.as_tensor(
+                u, dtype=torch.float32, device=DEVICE
+            )
+            self._cached_dataset_id = id(dataset)
+
+        return self._cached_dataset_xy, self._cached_dataset_u
 
     def forward(self, x, y):
         """Forward pass through the neural network.
@@ -138,14 +174,13 @@ class FeedForward(nn.Module):
         Returns:
             Data loss value
         """
+        xy_all, u_all = self._get_cached_dataset_tensors(dataset)
         torch.manual_seed(42)
-        idx = torch.randint(len(dataset), (self.num_data,))
-        xy, u = dataset[idx]
+        idx = torch.randint(len(xy_all), (self.num_data,), device=xy_all.device)
+        xy = xy_all[idx]
+        u = u_all[idx]
 
-        x, y = xy.unbind(axis=1)
-        x = torch.tensor(x, dtype=torch.float32).to(DEVICE)
-        y = torch.tensor(y, dtype=torch.float32).to(DEVICE)
-        u = torch.tensor(u, dtype=torch.float32).to(DEVICE)
+        x, y = xy.unbind(dim=1)
 
         u_pred = self.forward(x, y)
         loss_data = torch.mean(torch.square(u - u_pred))

@@ -7,84 +7,7 @@ import numpy as np
 import random
 import torch
 import os
-from ngsolve import *
-from config import DEVICE, DIRECTORY
-
-
-def fix_random_model_error(model, mesh, gfu, mesh_x, mesh_y, fe_space):
-    """Fixed version of get_random_model_error function.
-
-    Args:
-        model: PINN model
-        mesh: NGSolve mesh
-        gfu: FEM solution (GridFunction)
-        mesh_x: x-coordinates for evaluation
-        mesh_y: y-coordinates for evaluation
-        fe_space: Finite element space
-
-    Returns:
-        None (updates model error and residual history)
-    """
-    # Make predictions at the specified points
-    u_pred = model.forward(mesh_x.to(DEVICE).float(), mesh_y.to(DEVICE).float())
-    u_pred = u_pred.detach().cpu().numpy()
-
-    # Create GridFunction with predictions
-    u_plot = GridFunction(fe_space)
-    u_plot.vec[:] = BaseVector(u_pred.flatten())
-
-    # Ensure output directory exists
-    if not os.path.exists(DIRECTORY):
-        os.makedirs(DIRECTORY)
-
-    # Compute errors
-    error = (u_plot - gfu) * (u_plot - gfu)
-    total_error = Integrate(error, mesh, VOL)
-    boundary_error = Integrate(error, mesh, BND)
-
-    # Compute residuals
-    res = model.PDE_residual(mesh_x, mesh_y).detach().numpy()
-    residuals = GridFunction(fe_space)
-    residuals.vec[:] = BaseVector(res.flatten())
-    residuals = residuals * residuals
-
-    total_residual = Integrate(residuals, mesh, VOL)
-    boundary_residual = Integrate(residuals, mesh, BND)
-
-    # Update model history
-    model.total_error_history.append(total_error)
-    model.boundary_error_history.append(boundary_error)
-    model.total_residual_history.append(total_residual)
-    model.boundary_residual_history.append(boundary_residual)
-
-    print(
-        f"Random model - Total Error: {total_error:.6e}, Boundary Error: {boundary_error:.6e}"
-    )
-
-
-def validate_mesh_points(mesh_x, mesh_y, mesh):
-    """Validate that mesh points are within the domain.
-
-    Args:
-        mesh_x: x-coordinates
-        mesh_y: y-coordinates
-        mesh: NGSolve mesh
-
-    Returns:
-        bool: True if all points are valid
-    """
-    if len(mesh_x) != len(mesh_y):
-        return False
-
-    valid_count = 0
-    for x, y in zip(mesh_x, mesh_y):
-        try:
-            if not mesh(float(x), float(y)).nr == -1:
-                valid_count += 1
-        except Exception:
-            pass
-
-    return valid_count == len(mesh_x)
+from config import DEVICE, REQUESTED_DEVICE
 
 
 def tensor_to_numpy_safe(tensor):
@@ -99,25 +22,6 @@ def tensor_to_numpy_safe(tensor):
     if isinstance(tensor, torch.Tensor):
         return tensor.detach().cpu().numpy()
     return np.array(tensor)
-
-
-def ensure_tensor(data, device=None):
-    """Ensure data is a PyTorch tensor on the specified device.
-
-    Args:
-        data: Input data (tensor, array, or list)
-        device: Target device (uses config default if None)
-
-    Returns:
-        torch.Tensor: Converted tensor
-    """
-    if device is None:
-        device = DEVICE
-
-    if not isinstance(data, torch.Tensor):
-        data = torch.tensor(data)
-
-    return data.to(device)
 
 
 def set_global_seed(seed: int) -> None:
@@ -140,36 +44,6 @@ def set_global_seed(seed: int) -> None:
         pass
 
 
-def create_directory_structure(base_dir=None):
-    """Create the required directory structure for the project.
-
-    Args:
-        base_dir: Base directory (uses config default if None)
-
-    Returns:
-        dict: Created directories
-    """
-    if base_dir is None:
-        base_dir = DIRECTORY
-
-    directories = {
-        "main": base_dir,
-        "images": base_dir,
-        "models": os.path.join(base_dir, "models"),
-        "results": os.path.join(base_dir, "results"),
-        "logs": os.path.join(base_dir, "logs"),
-    }
-
-    for name, path in directories.items():
-        try:
-            os.makedirs(path, exist_ok=True)
-            print(f"Created/verified directory: {path}")
-        except Exception as e:
-            print(f"Warning: Could not create directory {path}: {e}")
-
-    return directories
-
-
 def save_model_checkpoint(model, filepath, additional_info=None):
     """Save model checkpoint with metadata.
 
@@ -187,12 +61,31 @@ def save_model_checkpoint(model, filepath, additional_info=None):
             "mesh_x": tensor_to_numpy_safe(model.mesh_x),
             "mesh_y": tensor_to_numpy_safe(model.mesh_y),
             "total_error_history": model.total_error_history,
+            "total_error_rms_history": getattr(model, "total_error_rms_history", []),
             "boundary_error_history": model.boundary_error_history,
             "train_loss_history": model.train_loss_history,
             "total_residual_history": model.total_residual_history,
             "boundary_residual_history": model.boundary_residual_history,
+            "fixed_total_residual_history": getattr(
+                model, "fixed_total_residual_history", []
+            ),
+            "fixed_boundary_residual_history": getattr(
+                model, "fixed_boundary_residual_history", []
+            ),
+            "fixed_rms_residual_history": getattr(
+                model, "fixed_rms_residual_history", []
+            ),
             "mesh_point_history": model.mesh_point_history,
             "mesh_point_count_history": model.mesh_point_count_history,
+            "iteration_point_count_history": getattr(
+                model, "iteration_point_count_history", []
+            ),
+            "iteration_runtime_history": getattr(
+                model, "iteration_runtime_history", []
+            ),
+            "cumulative_runtime_history": getattr(
+                model, "cumulative_runtime_history", []
+            ),
         }
 
         if additional_info:
@@ -221,17 +114,43 @@ def load_model_checkpoint(model, filepath):
         checkpoint = torch.load(filepath, map_location=DEVICE)
 
         model.load_state_dict(checkpoint["model_state_dict"])
-        model.mesh_x = torch.tensor(checkpoint["mesh_x"])
-        model.mesh_y = torch.tensor(checkpoint["mesh_y"])
+        if hasattr(model, "set_mesh_points"):
+            model.set_mesh_points(checkpoint["mesh_x"], checkpoint["mesh_y"])
+        else:
+            model.mesh_x = torch.tensor(
+                checkpoint["mesh_x"], dtype=torch.float32, device=DEVICE
+            )
+            model.mesh_y = torch.tensor(
+                checkpoint["mesh_y"], dtype=torch.float32, device=DEVICE
+            )
         model.total_error_history = checkpoint.get("total_error_history", [])
+        model.total_error_rms_history = checkpoint.get("total_error_rms_history", [])
         model.boundary_error_history = checkpoint.get("boundary_error_history", [])
         model.train_loss_history = checkpoint.get("train_loss_history", [])
         model.total_residual_history = checkpoint.get("total_residual_history", [])
         model.boundary_residual_history = checkpoint.get(
             "boundary_residual_history", []
         )
+        model.fixed_total_residual_history = checkpoint.get(
+            "fixed_total_residual_history", []
+        )
+        model.fixed_boundary_residual_history = checkpoint.get(
+            "fixed_boundary_residual_history", []
+        )
+        model.fixed_rms_residual_history = checkpoint.get(
+            "fixed_rms_residual_history", []
+        )
         model.mesh_point_history = checkpoint.get("mesh_point_history", [])
         model.mesh_point_count_history = checkpoint.get("mesh_point_count_history", [])
+        model.iteration_point_count_history = checkpoint.get(
+            "iteration_point_count_history", []
+        )
+        model.iteration_runtime_history = checkpoint.get(
+            "iteration_runtime_history", []
+        )
+        model.cumulative_runtime_history = checkpoint.get(
+            "cumulative_runtime_history", []
+        )
 
         print(f"Model checkpoint loaded from {filepath}")
         return True
@@ -294,6 +213,7 @@ def get_system_info():
         dict: System information
     """
     info = {
+        "requested_device": REQUESTED_DEVICE,
         "device": str(DEVICE),
         "torch_version": torch.__version__,
         "cuda_available": torch.cuda.is_available(),
@@ -301,7 +221,9 @@ def get_system_info():
 
     if torch.cuda.is_available():
         info["cuda_device_count"] = torch.cuda.device_count()
-        info["cuda_device_name"] = torch.cuda.get_device_name(0)
+        current_index = DEVICE.index if DEVICE.type == "cuda" else 0
+        info["cuda_device_name"] = torch.cuda.get_device_name(current_index)
+        info["cuda_selected_index"] = current_index
 
     try:
         import ngsolve
@@ -374,172 +296,3 @@ def log_experiment_info(model, config_info=None, filepath=None):
             f.write(f"  Final total error: {model.total_error_history[-1]:.6e}\n")
 
     print(f"Experiment log saved to {filepath}")
-
-
-def cleanup_gif_png_files(directory=None, patterns=None, dry_run=False):
-    """
-    Clean up PNG files that were generated for GIF creation.
-
-    This function removes intermediate PNG files created during adaptive mesh
-    visualization, which can accumulate and take up significant disk space.
-
-    Args:
-        directory: Directory to clean (uses config DIRECTORY if None)
-        patterns: List of filename patterns to match (uses defaults if None)
-        dry_run: If True, only shows what would be deleted without deleting
-
-    Returns:
-        dict: Summary of cleanup results
-    """
-    if directory is None:
-        directory = DIRECTORY
-
-    # Default patterns for GIF-related PNG files
-    if patterns is None:
-        patterns = [
-            "*residuals*.png",  # Residual field images
-            "*errors*.png",  # Error field images
-            "*iter_*.png",  # Iteration-specific images
-            "*_step_*.png",  # Step-specific images
-            "*adaptation_*.png",  # Adaptation images
-        ]
-
-    import glob
-
-    results = {
-        "files_found": [],
-        "files_deleted": [],
-        "errors": [],
-        "total_size_freed": 0,
-    }
-
-    print(f"{'DRY RUN: ' if dry_run else ''}Cleaning up GIF PNG files in {directory}")
-
-    # Find all matching files
-    for pattern in patterns:
-        search_path = os.path.join(directory, pattern)
-        matching_files = glob.glob(search_path)
-        results["files_found"].extend(matching_files)
-
-    # Remove duplicates and sort
-    results["files_found"] = sorted(list(set(results["files_found"])))
-
-    if not results["files_found"]:
-        print("No GIF PNG files found to clean up")
-        return results
-
-    print(f"Found {len(results['files_found'])} files matching patterns:")
-    for pattern in patterns:
-        print(f"  {pattern}")
-
-    # Process each file
-    for file_path in results["files_found"]:
-        try:
-            # Get file size
-            if os.path.exists(file_path):
-                file_size = os.path.getsize(file_path)
-                results["total_size_freed"] += file_size
-
-                if dry_run:
-                    print(
-                        f"  Would delete: {os.path.basename(file_path)} ({file_size} bytes)"
-                    )
-                else:
-                    os.remove(file_path)
-                    results["files_deleted"].append(file_path)
-                    print(
-                        f"  Deleted: {os.path.basename(file_path)} ({file_size} bytes)"
-                    )
-
-        except Exception as e:
-            error_msg = f"Error processing {file_path}: {e}"
-            results["errors"].append(error_msg)
-            print(f"  Error: {error_msg}")
-
-    # Summary
-    if dry_run:
-        print("\nDry run complete:")
-        print(f"  {len(results['files_found'])} files would be deleted")
-        print(f"  {results['total_size_freed']} bytes would be freed")
-    else:
-        print("\nCleanup complete:")
-        print(f"  {len(results['files_deleted'])} files deleted")
-        print(f"  {results['total_size_freed']} bytes freed")
-        if results["errors"]:
-            print(f"  {len(results['errors'])} errors encountered")
-
-    return results
-
-
-def cleanup_all_temp_files(directory=None, dry_run=False):
-    """
-    Clean up all temporary files including PNG files, VTK exports, and cache files.
-
-    Args:
-        directory: Directory to clean (uses config DIRECTORY if None)
-        dry_run: If True, shows what would be deleted without deleting
-
-    Returns:
-        dict: Summary of cleanup results
-    """
-    if directory is None:
-        directory = DIRECTORY
-
-    temp_patterns = [
-        # GIF-related PNG files
-        "*residuals*.png",
-        "*errors*.png",
-        "*iter_*.png",
-        "*_step_*.png",
-        "*adaptation_*.png",
-        # VTK export files
-        "*.vtu",
-        "*.vtk",
-        "vtk_export*",
-        # Cache files
-        "*.pyc",
-        "__pycache__",
-    ]
-
-    print(f"{'DRY RUN: ' if dry_run else ''}Cleaning up all temporary files...")
-
-    # Clean PNG files first
-    png_results = cleanup_gif_png_files(
-        directory, patterns=temp_patterns[:5], dry_run=dry_run
-    )
-
-    # Clean other temp files
-    import glob
-    import shutil
-
-    other_files = []
-    for pattern in temp_patterns[5:]:
-        search_path = os.path.join(directory, pattern)
-        matching_files = glob.glob(search_path)
-        other_files.extend(matching_files)
-
-    total_cleaned = len(png_results["files_deleted"])
-
-    for file_path in other_files:
-        try:
-            if dry_run:
-                if os.path.isdir(file_path):
-                    print(f"  Would remove directory: {os.path.basename(file_path)}")
-                else:
-                    print(f"  Would delete: {os.path.basename(file_path)}")
-            else:
-                if os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-                    print(f"  Removed directory: {os.path.basename(file_path)}")
-                else:
-                    os.remove(file_path)
-                    print(f"  Deleted: {os.path.basename(file_path)}")
-                total_cleaned += 1
-        except Exception as e:
-            print(f"  Error processing {file_path}: {e}")
-
-    print(
-        f"\n{'Dry run' if dry_run else 'Cleanup'} complete: {total_cleaned} items processed"
-    )
-
-    return png_results
