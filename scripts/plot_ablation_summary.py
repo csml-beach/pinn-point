@@ -5,18 +5,44 @@ Reads outputs/*/reports/all_methods_histories.csv and writes plots to
 outputs/ablation_summary/.
 """
 
+import argparse
 from pathlib import Path
 import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="Aggregate ablation run CSVs")
+    parser.add_argument(
+        "--outputs",
+        default="outputs",
+        help="Root outputs directory (default: outputs)",
+    )
+    parser.add_argument(
+        "--run-id-contains",
+        default="ablation-",
+        help=(
+            "Only include runs whose output directory name contains this token "
+            "(default: ablation-). Set empty string to include all runs."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    outputs = Path("outputs")
+    args = _parse_args()
+    outputs = Path(args.outputs)
     csvs = list(outputs.glob("*/reports/all_methods_histories.csv"))
+    if args.run_id_contains:
+        csvs = [p for p in csvs if args.run_id_contains in p.parents[1].name]
     if not csvs:
-        print("No all_methods_histories.csv found in outputs/*/reports")
+        print(
+            "No matching all_methods_histories.csv found in "
+            f"{outputs}/*/reports (filter={args.run_id_contains!r})"
+        )
         return 1
+    print(f"Including {len(csvs)} run(s) for aggregation")
 
     dfs = []
     for p in csvs:

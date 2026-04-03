@@ -4,6 +4,28 @@ set -euo pipefail
 eval "$(pyenv init -)"
 pyenv activate torch
 
+EXPORT_IMAGES=0
+CREATE_GIFS=0
+
+usage() {
+  cat <<'EOF'
+Usage: run_ablation_solutions_all.sh [--viz] [--gifs]
+
+Defaults:
+  --viz  off (export_images=false)
+  --gifs off (create_gifs=false)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --viz) EXPORT_IMAGES=1; shift ;;
+    --gifs) EXPORT_IMAGES=1; CREATE_GIFS=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
+  esac
+done
+
 run_solution() {
   local label=$1
   local epochs=$2
@@ -19,6 +41,8 @@ run_solution() {
   NUM_ADAPTATIONS=$num_adapt \
   W_BC=$w_bc \
   HIDDEN_SIZE=$hidden_size \
+  EXPORT_IMAGES=$EXPORT_IMAGES \
+  CREATE_GIFS=$CREATE_GIFS \
   LABEL=$label \
   python - <<'PY'
 import os
@@ -29,7 +53,7 @@ from paths import generate_run_id, set_active_run, write_run_metadata
 from utils import set_global_seed
 from config import TRAINING_CONFIG, MESH_CONFIG, MODEL_CONFIG
 
-METHODS = ['adaptive', 'random', 'halton', 'sobol', 'random_r', 'rad']
+METHODS = ['adaptive', 'adaptive_hybrid_anchor', 'random', 'halton', 'sobol', 'random_r', 'rad']
 SEEDS = [42, 123, 456, 789, 1011, 2022, 3033, 4044, 5055, 6066]
 
 label = os.environ['LABEL']
@@ -42,6 +66,8 @@ w_bc_env = os.environ.get('W_BC', 'None')
 hs_env = os.environ.get('HIDDEN_SIZE', 'None')
 w_bc = None if w_bc_env == 'None' else float(w_bc_env)
 hidden_size = None if hs_env == 'None' else int(hs_env)
+export_images = os.environ.get("EXPORT_IMAGES", "0") == "1"
+create_gifs = os.environ.get("CREATE_GIFS", "0") == "1"
 
 TRAINING_CONFIG['epochs'] = epochs
 MESH_CONFIG['reference_mesh_factor'] = ref_mesh
@@ -73,8 +99,8 @@ for seed in SEEDS:
         mesh_size=mesh_size,
         num_adaptations=num_adapt,
         epochs=epochs,
-        export_images=True,
-        create_gifs=True,
+        export_images=export_images,
+        create_gifs=create_gifs,
         generate_report=True,
         methods_to_run=METHODS,
     )
