@@ -50,6 +50,23 @@ SMOKE_DEFAULT_NUM_ADAPTATIONS = 1
 SMOKE_DEFAULT_EPOCHS = 1
 SMOKE_DEFAULT_REFERENCE_MESH_FACTOR = 0.05
 
+DEV_DEFAULT_METHODS = ["adaptive", "random", "halton"]
+DEV_DEFAULT_MESH_SIZE = 0.7
+DEV_DEFAULT_NUM_ADAPTATIONS = 4
+DEV_DEFAULT_EPOCHS = 100
+DEV_DEFAULT_REFERENCE_MESH_FACTOR = 0.05
+
+SCREEN_DEFAULT_METHODS = [
+    "adaptive",
+    "adaptive_hybrid_anchor",
+    "random",
+    "halton",
+]
+SCREEN_DEFAULT_MESH_SIZE = 0.7
+SCREEN_DEFAULT_NUM_ADAPTATIONS = 6
+SCREEN_DEFAULT_EPOCHS = 200
+SCREEN_DEFAULT_REFERENCE_MESH_FACTOR = 0.05
+
 
 def _resolve_seed():
     seed = TRAINING_CONFIG.get("seed")
@@ -58,9 +75,215 @@ def _resolve_seed():
     return int(seed)
 
 
-def _parse_methods_arg(raw_value):
+def _parse_methods_arg(raw_value, fallback_methods=None):
     methods = [method.strip() for method in raw_value.split(",") if method.strip()]
-    return methods or list(SMOKE_DEFAULT_METHODS)
+    fallback = fallback_methods or SMOKE_DEFAULT_METHODS
+    return methods or list(fallback)
+
+
+def _parse_dev_args(args):
+    options = {
+        "seed": None,
+        "methods_to_run": list(DEV_DEFAULT_METHODS),
+        "mesh_size": DEV_DEFAULT_MESH_SIZE,
+        "num_adaptations": DEV_DEFAULT_NUM_ADAPTATIONS,
+        "epochs": DEV_DEFAULT_EPOCHS,
+        "reference_mesh_factor": DEV_DEFAULT_REFERENCE_MESH_FACTOR,
+        "problem_name": "poisson",
+        "problem_kwargs": None,
+        "export_images": False,
+        "create_gifs": False,
+        "generate_report": True,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed value '{args[i + 1]}', using random")
+            i += 2
+            continue
+        if arg == "--methods" and i + 1 < len(args):
+            options["methods_to_run"] = _parse_methods_arg(
+                args[i + 1], fallback_methods=DEV_DEFAULT_METHODS
+            )
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(
+                    f"Warning: invalid mesh size '{args[i + 1]}', using default dev value"
+                )
+            i += 2
+            continue
+        if arg == "--iterations" and i + 1 < len(args):
+            try:
+                options["num_adaptations"] = int(args[i + 1])
+            except ValueError:
+                print(
+                    f"Warning: invalid iterations value '{args[i + 1]}', using default dev value"
+                )
+            i += 2
+            continue
+        if arg == "--epochs" and i + 1 < len(args):
+            try:
+                options["epochs"] = int(args[i + 1])
+            except ValueError:
+                print(
+                    f"Warning: invalid epochs value '{args[i + 1]}', using default dev value"
+                )
+            i += 2
+            continue
+        if arg == "--reference-mesh-factor" and i + 1 < len(args):
+            try:
+                options["reference_mesh_factor"] = float(args[i + 1])
+            except ValueError:
+                print(
+                    "Warning: invalid reference mesh factor "
+                    f"'{args[i + 1]}', using default dev value"
+                )
+            i += 2
+            continue
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--problem-kwargs" and i + 1 < len(args):
+            try:
+                options["problem_kwargs"] = json.loads(args[i + 1])
+            except Exception as e:
+                print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        if arg == "--images":
+            options["export_images"] = True
+            i += 1
+            continue
+        if arg == "--gifs":
+            options["export_images"] = True
+            options["create_gifs"] = True
+            i += 1
+            continue
+        if arg == "--no-report":
+            options["generate_report"] = False
+            i += 1
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported dev arguments: {' '.join(ignored)}")
+    return options
+
+
+def _parse_screen_args(args):
+    options = {
+        "seed": None,
+        "methods_to_run": list(SCREEN_DEFAULT_METHODS),
+        "mesh_size": SCREEN_DEFAULT_MESH_SIZE,
+        "num_adaptations": SCREEN_DEFAULT_NUM_ADAPTATIONS,
+        "epochs": SCREEN_DEFAULT_EPOCHS,
+        "reference_mesh_factor": SCREEN_DEFAULT_REFERENCE_MESH_FACTOR,
+        "problem_name": "poisson",
+        "problem_kwargs": None,
+        "export_images": False,
+        "create_gifs": False,
+        "generate_report": True,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed value '{args[i + 1]}', using random")
+            i += 2
+            continue
+        if arg == "--methods" and i + 1 < len(args):
+            options["methods_to_run"] = _parse_methods_arg(
+                args[i + 1], fallback_methods=SCREEN_DEFAULT_METHODS
+            )
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(
+                    "Warning: invalid mesh size "
+                    f"'{args[i + 1]}', using default screen value"
+                )
+            i += 2
+            continue
+        if arg == "--iterations" and i + 1 < len(args):
+            try:
+                options["num_adaptations"] = int(args[i + 1])
+            except ValueError:
+                print(
+                    "Warning: invalid iterations value "
+                    f"'{args[i + 1]}', using default screen value"
+                )
+            i += 2
+            continue
+        if arg == "--epochs" and i + 1 < len(args):
+            try:
+                options["epochs"] = int(args[i + 1])
+            except ValueError:
+                print(
+                    "Warning: invalid epochs value "
+                    f"'{args[i + 1]}', using default screen value"
+                )
+            i += 2
+            continue
+        if arg == "--reference-mesh-factor" and i + 1 < len(args):
+            try:
+                options["reference_mesh_factor"] = float(args[i + 1])
+            except ValueError:
+                print(
+                    "Warning: invalid reference mesh factor "
+                    f"'{args[i + 1]}', using default screen value"
+                )
+            i += 2
+            continue
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--problem-kwargs" and i + 1 < len(args):
+            try:
+                options["problem_kwargs"] = json.loads(args[i + 1])
+            except Exception as e:
+                print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        if arg == "--images":
+            options["export_images"] = True
+            i += 1
+            continue
+        if arg == "--gifs":
+            options["export_images"] = True
+            options["create_gifs"] = True
+            i += 1
+            continue
+        if arg == "--no-report":
+            options["generate_report"] = False
+            i += 1
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported screen arguments: {' '.join(ignored)}")
+    return options
 
 
 def _parse_smoke_args(args):
@@ -87,7 +310,9 @@ def _parse_smoke_args(args):
             i += 2
             continue
         if arg == "--methods" and i + 1 < len(args):
-            options["methods_to_run"] = _parse_methods_arg(args[i + 1])
+            options["methods_to_run"] = _parse_methods_arg(
+                args[i + 1], fallback_methods=SMOKE_DEFAULT_METHODS
+            )
             i += 2
             continue
         if arg == "--mesh-size" and i + 1 < len(args):
@@ -212,19 +437,224 @@ def run_smoke_test(
         print("\nSmoke test summary:")
         for method_name, model in result.items():
             total_errors = getattr(model, "total_error_history", [])
+            relative_l2_errors = getattr(model, "relative_l2_error_history", [])
             point_counts = getattr(model, "mesh_point_count_history", [])
             final_error = total_errors[-1] if total_errors else None
+            final_relative_l2 = relative_l2_errors[-1] if relative_l2_errors else None
             final_points = point_counts[-1] if point_counts else None
             print(
                 f"  {method_name}: "
                 f"points={final_points if final_points is not None else 'n/a'}, "
-                f"final_error={final_error if final_error is not None else 'n/a'}"
+                f"relative_l2={final_relative_l2 if final_relative_l2 is not None else 'n/a'}, "
+                f"error_integral={final_error if final_error is not None else 'n/a'}"
             )
 
         print(f"Smoke test completed successfully. Results: {run_paths['root']}")
         return True
     except Exception as e:
         print(f"Smoke test failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
+def run_dev_experiment(
+    seed=None,
+    methods_to_run=None,
+    mesh_size=DEV_DEFAULT_MESH_SIZE,
+    num_adaptations=DEV_DEFAULT_NUM_ADAPTATIONS,
+    epochs=DEV_DEFAULT_EPOCHS,
+    reference_mesh_factor=DEV_DEFAULT_REFERENCE_MESH_FACTOR,
+    problem_name="poisson",
+    problem_kwargs=None,
+    export_images=False,
+    create_gifs=False,
+    generate_report=True,
+):
+    """Run the lean baseline development experiment profile."""
+    print("Running dev experiment...")
+
+    if seed is None:
+        seed = _resolve_seed()
+    seed = int(seed)
+    methods_to_run = methods_to_run or list(DEV_DEFAULT_METHODS)
+    set_global_seed(seed)
+
+    run_id = generate_run_id(f"dev-seed{seed}")
+    run_paths = set_active_run(run_id)
+    print(f"Dev run ID: {run_id}")
+    print(f"Outputs root: {run_paths['root']}")
+    print(
+        "Dev configuration: "
+        f"mesh_size={mesh_size}, iterations={num_adaptations}, epochs={epochs}, "
+        f"reference_mesh_factor={reference_mesh_factor}, methods={methods_to_run}, "
+        f"export_images={export_images}, create_gifs={create_gifs}, device={DEVICE}"
+    )
+
+    try:
+        write_run_metadata(
+            extra={
+                "phase": "dev_before_run",
+                "seed": seed,
+                "methods": methods_to_run,
+                "problem": problem_name,
+                "profile": "lean_dev",
+            }
+        )
+
+        result = run_complete_experiment(
+            mesh_size=mesh_size,
+            num_adaptations=num_adaptations,
+            epochs=epochs,
+            export_images=export_images,
+            create_gifs=create_gifs,
+            generate_report=generate_report,
+            methods_to_run=methods_to_run,
+            problem_name=problem_name,
+            problem_kwargs=problem_kwargs,
+            reference_mesh_factor=reference_mesh_factor,
+            seed=seed,
+        )
+
+        write_run_metadata(
+            extra={
+                "phase": "dev_after_run",
+                "seed": seed,
+                "methods": methods_to_run,
+                "problem": problem_name,
+                "profile": "lean_dev",
+            }
+        )
+
+        print("\nDev experiment summary:")
+        for method_name, model in result.items():
+            total_errors = getattr(model, "total_error_history", [])
+            relative_l2_errors = getattr(model, "relative_l2_error_history", [])
+            point_counts = getattr(model, "mesh_point_count_history", [])
+            runtimes = getattr(model, "cumulative_runtime_history", [])
+            final_error = total_errors[-1] if total_errors else None
+            final_relative_l2 = relative_l2_errors[-1] if relative_l2_errors else None
+            final_points = point_counts[-1] if point_counts else None
+            final_runtime = runtimes[-1] if runtimes else None
+            print(
+                f"  {method_name}: "
+                f"points={final_points if final_points is not None else 'n/a'}, "
+                f"relative_l2={final_relative_l2 if final_relative_l2 is not None else 'n/a'}, "
+                f"error_integral={final_error if final_error is not None else 'n/a'}, "
+                f"runtime_sec={final_runtime if final_runtime is not None else 'n/a'}"
+            )
+
+        print(f"Dev experiment completed successfully. Results: {run_paths['root']}")
+        return True
+    except Exception as e:
+        print(f"Dev experiment failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return False
+
+
+def run_screen_experiment(
+    seed=None,
+    methods_to_run=None,
+    mesh_size=SCREEN_DEFAULT_MESH_SIZE,
+    num_adaptations=SCREEN_DEFAULT_NUM_ADAPTATIONS,
+    epochs=SCREEN_DEFAULT_EPOCHS,
+    reference_mesh_factor=SCREEN_DEFAULT_REFERENCE_MESH_FACTOR,
+    problem_name="poisson",
+    problem_kwargs=None,
+    export_images=False,
+    create_gifs=False,
+    generate_report=True,
+):
+    """Run the stronger screening experiment profile."""
+    print("Running screen experiment...")
+
+    if seed is None:
+        seed = _resolve_seed()
+    seed = int(seed)
+    methods_to_run = methods_to_run or list(SCREEN_DEFAULT_METHODS)
+    set_global_seed(seed)
+
+    run_id = generate_run_id(f"screen-seed{seed}")
+    run_paths = set_active_run(run_id)
+    print(f"Screen run ID: {run_id}")
+    print(f"Outputs root: {run_paths['root']}")
+    print(
+        "Screen configuration: "
+        f"mesh_size={mesh_size}, iterations={num_adaptations}, epochs={epochs}, "
+        f"reference_mesh_factor={reference_mesh_factor}, methods={methods_to_run}, "
+        f"export_images={export_images}, create_gifs={create_gifs}, device={DEVICE}"
+    )
+
+    try:
+        write_run_metadata(
+            extra={
+                "phase": "screen_before_run",
+                "seed": seed,
+                "methods": methods_to_run,
+                "problem": problem_name,
+                "profile": "screen",
+            }
+        )
+
+        result = run_complete_experiment(
+            mesh_size=mesh_size,
+            num_adaptations=num_adaptations,
+            epochs=epochs,
+            export_images=export_images,
+            create_gifs=create_gifs,
+            generate_report=generate_report,
+            methods_to_run=methods_to_run,
+            problem_name=problem_name,
+            problem_kwargs=problem_kwargs,
+            reference_mesh_factor=reference_mesh_factor,
+            seed=seed,
+        )
+
+        write_run_metadata(
+            extra={
+                "phase": "screen_after_run",
+                "seed": seed,
+                "methods": methods_to_run,
+                "problem": problem_name,
+                "profile": "screen",
+            }
+        )
+
+        print("\nScreen experiment summary:")
+        for method_name, model in result.items():
+            total_errors = getattr(model, "total_error_history", [])
+            relative_l2_errors = getattr(model, "relative_l2_error_history", [])
+            relative_fixed_l2_residuals = getattr(
+                model, "relative_fixed_l2_residual_history", []
+            )
+            point_counts = getattr(model, "mesh_point_count_history", [])
+            runtimes = getattr(model, "cumulative_runtime_history", [])
+            final_error = total_errors[-1] if total_errors else None
+            final_relative_l2 = relative_l2_errors[-1] if relative_l2_errors else None
+            final_relative_residual = (
+                relative_fixed_l2_residuals[-1]
+                if relative_fixed_l2_residuals
+                else None
+            )
+            final_points = point_counts[-1] if point_counts else None
+            final_runtime = runtimes[-1] if runtimes else None
+            print(
+                f"  {method_name}: "
+                f"points={final_points if final_points is not None else 'n/a'}, "
+                f"relative_l2={final_relative_l2 if final_relative_l2 is not None else 'n/a'}, "
+                "relative_fixed_l2_residual="
+                f"{final_relative_residual if final_relative_residual is not None else 'n/a'}, "
+                f"error_integral={final_error if final_error is not None else 'n/a'}, "
+                f"runtime_sec={final_runtime if final_runtime is not None else 'n/a'}"
+            )
+
+        print(f"Screen experiment completed successfully. Results: {run_paths['root']}")
+        return True
+    except Exception as e:
+        print(f"Screen experiment failed: {e}")
         import traceback
 
         traceback.print_exc()
@@ -313,25 +743,28 @@ def main():
                 f"  Mesh refinement: {initial_points:,} → {final_points:,} points (×{refinement_factor:.2f})"
             )
 
-        if adaptive_model and adaptive_model.total_error_history:
-            initial_error = adaptive_model.total_error_history[0]
-            final_error = adaptive_model.total_error_history[-1]
+        if adaptive_model and getattr(adaptive_model, "relative_l2_error_history", None):
+            initial_error = adaptive_model.relative_l2_error_history[0]
+            final_error = adaptive_model.relative_l2_error_history[-1]
             error_reduction = (
                 initial_error / final_error if final_error > 0 else float("inf")
             )
             print(
-                f"  Error reduction: {initial_error:.2e} → {final_error:.2e} (×{error_reduction:.2f})"
+                "  Relative L2 reduction: "
+                f"{initial_error:.2e} → {final_error:.2e} (×{error_reduction:.2f})"
             )
 
         # Random model results
         if random_model:
             print("Random Model:")
-            if random_model.total_error_history:
-                final_random_error = random_model.total_error_history[-1]
-                print(f"  Final error: {final_random_error:.2e}")
+            if getattr(random_model, "relative_l2_error_history", None):
+                final_random_error = random_model.relative_l2_error_history[-1]
+                print(f"  Final relative L2 error: {final_random_error:.2e}")
 
-                if adaptive_model and adaptive_model.total_error_history:
-                    final_adaptive_error = adaptive_model.total_error_history[-1]
+                if adaptive_model and getattr(
+                    adaptive_model, "relative_l2_error_history", None
+                ):
+                    final_adaptive_error = adaptive_model.relative_l2_error_history[-1]
                     improvement = (
                         final_random_error / final_adaptive_error
                         if final_adaptive_error > 0
@@ -479,6 +912,18 @@ if __name__ == "__main__":
                 if results
                 else False
             )
+        elif mode == "dev":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            dev_options = _parse_dev_args(remaining)
+            if seed_override is not None:
+                dev_options["seed"] = seed_override
+            success = run_dev_experiment(**dev_options)
+        elif mode == "screen":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            screen_options = _parse_screen_args(remaining)
+            if seed_override is not None:
+                screen_options["seed"] = seed_override
+            success = run_screen_experiment(**screen_options)
         elif mode == "main":
             # Parse --seed flag
             seed_override, _ = parse_seed_arg(sys.argv[2:])
@@ -501,7 +946,7 @@ if __name__ == "__main__":
         else:
             print(
                 "Usage: python main.py "
-                "[main|smoke|hparams|cleanup|cleanup-all|ablate-plot]"
+                "[main|dev|screen|smoke|hparams|cleanup|cleanup-all|ablate-plot]"
             )
             print("")
             print("Commands:")
@@ -510,6 +955,34 @@ if __name__ == "__main__":
             print("                              Examples: cpu, cuda, cuda:0, auto")
             print("  main         Run full experiment (default)")
             print("               --seed <int>   Override random seed")
+            print("  dev          Run the lean development experiment profile")
+            print("               --seed <int>   Override dev seed")
+            print("               --methods <m1,m2>  Comma-separated method list")
+            print("               --mesh-size <f>     Initial mesh size")
+            print("               --iterations <n>    Adaptation steps")
+            print("               --epochs <n>        Training epochs per step")
+            print(
+                "               --reference-mesh-factor <f>  Reference mesh size factor"
+            )
+            print("               --problem <name>    Problem name")
+            print("               --problem-kwargs '{...}'  Inline JSON kwargs")
+            print("               --images            Export PNG visualizations")
+            print("               --gifs              Export PNGs and GIFs")
+            print("               --no-report         Skip report/plot bundle generation")
+            print("  screen       Run the stronger screening experiment profile")
+            print("               --seed <int>   Override screen seed")
+            print("               --methods <m1,m2>  Comma-separated method list")
+            print("               --mesh-size <f>     Initial mesh size")
+            print("               --iterations <n>    Adaptation steps")
+            print("               --epochs <n>        Training epochs per step")
+            print(
+                "               --reference-mesh-factor <f>  Reference mesh size factor"
+            )
+            print("               --problem <name>    Problem name")
+            print("               --problem-kwargs '{...}'  Inline JSON kwargs")
+            print("               --images            Export PNG visualizations")
+            print("               --gifs              Export PNGs and GIFs")
+            print("               --no-report         Skip report/plot bundle generation")
             print("  smoke        Run a minimal end-to-end smoke test")
             print("               --seed <int>   Override smoke-test seed")
             print("               --methods <m1,m2>  Comma-separated method list")

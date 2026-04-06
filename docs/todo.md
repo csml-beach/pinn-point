@@ -11,8 +11,16 @@ This file tracks follow-ups that should be revisited after the current refactor 
 
 - [ ] Finish moving all PDE-specific logic out of `train/pinn_model.py` and `train/fem_solver.py` so new PDEs only require work inside `train/problems/`.
 - [ ] Replace the remaining string-based method dispatch in `train/experiments.py` with a cleaner registry-driven flow end to end.
-- [ ] Decouple geometry selection from the current hardcoded L-shaped domain in `train/geometry.py` so problems can own their own domain construction.
-- [ ] Implement the minimal SSH/tmux/rsync remote experiment runner described in `docs/remote_experiment_plan.md`.
+- [ ] Decouple geometry selection from the current hardcoded perforated square domain in `train/geometry.py` so problems can own their own domain construction.
+- [ ] Fold the current remote submission workflow into the repo docs and experiment workflow, using the sibling toolkit at `../remote-ops/pinn-point/README.md` as the current reference instead of the missing `docs/remote_experiment_plan.md`.
+
+## Next Round: RAD Stability
+
+- [x] Investigate recurring `RAD` NaN failures observed in remote ablation runs (`ValueError: probabilities contain NaN` in `train/methods/rad.py`).
+- [x] Add numeric guards in `RAD` weight construction and sampling (`residual^k`, normalization, probability cleanup/fallback) so invalid PDFs cannot reach `numpy.random.choice`.
+- [x] Add explicit per-iteration RAD diagnostics (finite/non-finite counts, min/max/mean weight stats, fallback reason) to logs and exported run artifacts.
+- [x] Add a deterministic smoke/regression test that reproduces the historical RAD failure path and verifies the guarded behavior.
+- [x] Investigate why current experiments are so expensive (runtime and resource cost), identify primary cost drivers, and define a lean baseline protocol to pin down core scientific results before launching long/heavy production runs. See `docs/lean_baseline_protocol.md`.
 
 ## Completed Recently
 

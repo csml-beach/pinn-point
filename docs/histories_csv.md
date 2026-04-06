@@ -19,27 +19,41 @@ Each row corresponds to one method at one iteration.
   - Iteration index for that method.
 
 - `total_error`
-  - Integrated solution error on the fixed reference mesh.
+  - Integrated squared solution error on the fixed reference mesh.
+  - This is the raw quantity `∫Ω (u-u_ref)^2 dΩ`.
+
+- `relative_l2_error`
+  - Relative L2 solution error on the fixed reference mesh.
+  - Computed as `sqrt( total_error / ∫Ω u_ref^2 dΩ )`.
+  - This is the preferred headline solution-error metric for interpretation.
 
 - `total_error_rms`
   - RMS solution error at reference-mesh vertices.
 
+- `relative_error_rms`
+  - RMS solution error normalized by the reference-solution RMS at the same reference-mesh vertices.
+  - This is the easiest scale-free counterpart to `total_error_rms`.
+
 - `boundary_error`
   - Integrated boundary error on the reference mesh.
 
-- `total_residual`
-  - Training residual measured on the method's own current collocation mesh or points.
-  - Treat this primarily as a method-behavior diagnostic, not as the main fair comparison metric.
-
 - `fixed_total_residual`
   - Fixed-grid integrated residual on the common reference mesh.
+
+- `relative_fixed_l2_residual`
+  - Relative fixed-grid L2 residual on the common reference mesh.
+  - Computed as `sqrt( fixed_total_residual / ∫Ω f^2 dΩ )` when the PDE source term `f` is available.
+  - This is the preferred headline residual metric for interpretation.
 
 - `fixed_boundary_residual`
   - Fixed-grid boundary residual on the common reference mesh when available.
 
 - `fixed_rms_residual`
   - RMS residual on the common reference mesh.
-  - This is the preferred residual-based comparison metric across methods.
+
+- `relative_fixed_rms_residual`
+  - RMS residual on the common reference mesh normalized by the RMS of the source term on the same reference mesh vertices.
+  - This is the scale-free counterpart to `fixed_rms_residual`.
 
 - `point_count`
   - Number of collocation points used during that iteration.
@@ -55,11 +69,14 @@ Each row corresponds to one method at one iteration.
 ### Suggested Usage
 
 - For main comparison plots:
-  - use `total_error` or `total_error_rms` against iteration, point count, and cumulative runtime.
+  - prefer `relative_l2_error` or `relative_error_rms` against iteration, point count, and cumulative runtime;
+  - keep `total_error` and `total_error_rms` for continuity and debugging.
 
 - For residual plots:
-  - prefer `fixed_rms_residual`;
-  - use `fixed_total_residual` as a supporting integrated measure.
+  - prefer `relative_fixed_l2_residual` or `relative_fixed_rms_residual`;
+  - keep `fixed_total_residual` and `fixed_rms_residual` as supporting raw measures.
 
-- For method diagnostics:
-  - inspect `total_residual` to understand how each method behaves on its own training points or mesh.
+### Not Included On Purpose
+
+- Training residuals measured on each method's own evolving collocation set are intentionally excluded from the canonical history CSV.
+- They are method-local diagnostics, not fair cross-method comparison metrics.

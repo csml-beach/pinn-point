@@ -206,15 +206,16 @@ def get_random_points(mesh, random_point_count=None):
     # Optional diagnostics
     try:
         if RANDOM_CONFIG.get("log_sampling_stats", False):
-            import os
+            from paths import method_reports_dir
 
-            rdir = reports_dir()
-            os.makedirs(rdir, exist_ok=True)
+            rdir = method_reports_dir("legacy_random")
             acc = len(random_points)
             rate = acc / max(attempts, 1)
-            with open(os.path.join(rdir, "point_sampling_stats.txt"), "a") as f:
+            with open(os.path.join(rdir, "sampling_stats.txt"), "a") as f:
                 f.write(
-                    f"requested={random_point_count}, accepted={acc}, attempts={attempts}, acceptance_rate={rate:.4f}, bounds=[{domain_min:.3f},{domain_max:.3f}]\n"
+                    f"iteration=n/a, label=legacy_random_points, requested={random_point_count}, "
+                    f"accepted={acc}, generated={attempts}, acceptance_rate={rate:.4f}, "
+                    f"bounds=[{domain_min:.3f},{domain_max:.3f}]\n"
                 )
     except Exception:
         pass

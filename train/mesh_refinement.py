@@ -15,6 +15,180 @@ from config import DEVICE, MESH_CONFIG, TRAINING_CONFIG
 import math
 
 
+def _model_images_dir(model):
+    try:
+        from paths import method_images_dir
+
+        method_name = getattr(model, "method_name", None)
+        if method_name:
+            return method_images_dir(method_name)
+    except Exception:
+        pass
+    return None
+
+
+def _append_history_value(model, history_name, value):
+    if not hasattr(model, history_name):
+        setattr(model, history_name, [])
+    getattr(model, history_name).append(value)
+
+
+def _reference_solution_vertex_values(reference_solution):
+    try:
+        return reference_solution.vec.FV().NumPy().reshape(-1)
+    except Exception:
+        try:
+            return np.array([v for v in reference_solution.vec]).reshape(-1)
+        except Exception:
+            return None
+
+
+def _ensure_reference_error_scales(
+    model, reference_mesh, reference_solution, reference_values=None
+):
+    scales = getattr(model, "_reference_error_scales", None)
+    if scales is None:
+        scales = {}
+
+    if "reference_l2_sq" not in scales:
+        try:
+            reference_l2_sq = float(
+                Integrate(reference_solution * reference_solution, reference_mesh, VOL)
+            )
+        except Exception:
+            reference_l2_sq = float("nan")
+        scales["reference_l2_sq"] = reference_l2_sq
+
+    if "reference_vertex_rms" not in scales:
+        if reference_values is None:
+            reference_values = _reference_solution_vertex_values(reference_solution)
+        if reference_values is None:
+            reference_vertex_rms = float("nan")
+        else:
+            ref_sq = np.square(np.asarray(reference_values, dtype=np.float64))
+            ref_sq = ref_sq[np.isfinite(ref_sq)]
+            reference_vertex_rms = (
+                float(np.sqrt(np.mean(ref_sq))) if ref_sq.size > 0 else float("nan")
+            )
+        scales["reference_vertex_rms"] = reference_vertex_rms
+
+    model._reference_error_scales = scales
+    return scales
+
+
+def _compute_relative_l2_error(total_error, reference_l2_sq):
+    try:
+        total_error = float(total_error)
+        reference_l2_sq = float(reference_l2_sq)
+    except Exception:
+        return float("nan")
+    if (
+        not math.isfinite(total_error)
+        or not math.isfinite(reference_l2_sq)
+        or total_error < 0
+        or reference_l2_sq <= 0
+    ):
+        return float("nan")
+    return float(math.sqrt(total_error / reference_l2_sq))
+
+
+def _compute_relative_scale_error(value, reference_scale):
+    try:
+        value = float(value)
+        reference_scale = float(reference_scale)
+    except Exception:
+        return float("nan")
+    if (
+        not math.isfinite(value)
+        or not math.isfinite(reference_scale)
+        or value < 0
+        or reference_scale <= 0
+    ):
+        return float("nan")
+    return float(value / reference_scale)
+
+
+def _evaluate_problem_source(problem, x_values, y_values):
+    if problem is None or not hasattr(problem, "source_term"):
+        return None
+    try:
+        tx = torch.as_tensor(x_values, dtype=torch.float32, device=DEVICE)
+        ty = torch.as_tensor(y_values, dtype=torch.float32, device=DEVICE)
+        with torch.no_grad():
+            source = problem.source_term(tx, ty)
+        if isinstance(source, torch.Tensor):
+            return source.detach().cpu().numpy().reshape(-1)
+        return np.asarray(source, dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+
+
+def _ensure_reference_residual_scales(model, reference_mesh, ref_coords=None):
+    scales = getattr(model, "_reference_residual_scales", None)
+    if scales is None:
+        scales = {}
+
+    problem = getattr(model, "problem", None)
+
+    if "reference_source_rms" not in scales:
+        if ref_coords is None:
+            ref_coords = export_vertex_coordinates(reference_mesh)
+        try:
+            ref_x, ref_y = ref_coords.unbind(1)
+        except Exception:
+            ref_x = ref_coords[:, 0]
+            ref_y = ref_coords[:, 1]
+        source_values = _evaluate_problem_source(problem, ref_x, ref_y)
+        if source_values is None:
+            source_rms = float("nan")
+        else:
+            source_sq = np.square(np.asarray(source_values, dtype=np.float64))
+            source_sq = source_sq[np.isfinite(source_sq)]
+            source_rms = (
+                float(np.sqrt(np.mean(source_sq))) if source_sq.size > 0 else float("nan")
+            )
+        scales["reference_source_rms"] = source_rms
+
+    if "reference_source_l2_sq" not in scales:
+        try:
+            total = 0.0
+            area_sum = 0.0
+            for el in reference_mesh.Elements(VOL):
+                verts = []
+                for v in el.vertices:
+                    p = reference_mesh[v].point
+                    if hasattr(p, "x"):
+                        verts.append((float(p.x), float(p.y)))
+                    else:
+                        verts.append((float(p[0]), float(p[1])))
+                if len(verts) != 3:
+                    continue
+                (x1, y1), (x2, y2), (x3, y3) = verts
+                area = abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) * 0.5
+                if area <= 0:
+                    continue
+                source_vals = _evaluate_problem_source(
+                    problem,
+                    [x1, x2, x3],
+                    [y1, y2, y3],
+                )
+                if source_vals is None:
+                    continue
+                source_sq = np.square(np.asarray(source_vals, dtype=np.float64))
+                source_sq = source_sq[np.isfinite(source_sq)]
+                if source_sq.size == 0:
+                    continue
+                total += area * float(np.mean(source_sq))
+                area_sum += area
+            source_l2_sq = total if area_sum > 0 else float("nan")
+        except Exception:
+            source_l2_sq = float("nan")
+        scales["reference_source_l2_sq"] = source_l2_sq
+
+    model._reference_residual_scales = scales
+    return scales
+
+
 def compute_model_residual_on_reference(
     model, reference_mesh, reference_solution, export_images=False, iteration=None
 ):
@@ -89,6 +263,8 @@ def compute_model_residual_on_reference(
     # Store histories (initialize if missing)
     if not hasattr(model, "fixed_total_residual_history"):
         model.fixed_total_residual_history = []
+    if not hasattr(model, "relative_fixed_l2_residual_history"):
+        model.relative_fixed_l2_residual_history = []
     if not hasattr(model, "fixed_boundary_residual_history"):
         model.fixed_boundary_residual_history = []
     if not hasattr(model, "fixed_rms_residual_history"):
@@ -109,6 +285,13 @@ def compute_model_residual_on_reference(
     except Exception:
         rms = float("nan")
     model.fixed_rms_residual_history.append(rms)
+    residual_scales = _ensure_reference_residual_scales(
+        model, reference_mesh, ref_coords=ref_coords
+    )
+    relative_l2_residual = _compute_relative_l2_error(
+        total_residual, residual_scales.get("reference_source_l2_sq")
+    )
+    model.relative_fixed_l2_residual_history.append(relative_l2_residual)
 
     # Optional visualization
     if export_images and iteration is not None:
@@ -119,10 +302,15 @@ def compute_model_residual_on_reference(
             residuals_gf,
             fieldname="fixed_residual",
             filename=f"fixed_residual_{iteration}.png",
+            output_dir=_model_images_dir(model),
         )
 
     try:
-        msg = f"[Fixed residual] Total: {total_residual:.6e}, Boundary: {boundary_residual:.6e}, RMS: {rms:.6e}"
+        msg = (
+            f"[Fixed residual] Total: {total_residual:.6e}, "
+            f"Relative L2: {relative_l2_residual:.6e}, "
+            f"Boundary: {boundary_residual:.6e}, RMS: {rms:.6e}"
+        )
     except Exception:
         msg = f"[Fixed residual] Total: {total_residual}, Boundary: {boundary_residual}, RMS: {rms}"
     print(msg)
@@ -197,9 +385,20 @@ def compute_model_residual_on_reference_quadrature(
 
         if not hasattr(model, "fixed_total_residual_history"):
             model.fixed_total_residual_history = []
+        if not hasattr(model, "relative_fixed_l2_residual_history"):
+            model.relative_fixed_l2_residual_history = []
         model.fixed_total_residual_history.append(float(total))
+        residual_scales = _ensure_reference_residual_scales(model, reference_mesh)
+        relative_l2_residual = _compute_relative_l2_error(
+            total, residual_scales.get("reference_source_l2_sq")
+        )
+        model.relative_fixed_l2_residual_history.append(relative_l2_residual)
 
-        print(f"[Fixed residual quad] Total: {total:.6e}, RMS(est): {rms:.6e}")
+        print(
+            "[Fixed residual quad] "
+            f"Total: {total:.6e}, Relative L2(est): {relative_l2_residual:.6e}, "
+            f"RMS(est): {rms:.6e}"
+        )
         return
     except Exception as e:
         print(
@@ -263,13 +462,27 @@ def compute_model_residual_on_reference_quadrature(
 
         if not hasattr(model, "fixed_total_residual_history"):
             model.fixed_total_residual_history = []
+        if not hasattr(model, "relative_fixed_l2_residual_history"):
+            model.relative_fixed_l2_residual_history = []
         model.fixed_total_residual_history.append(total)
+        residual_scales = _ensure_reference_residual_scales(model, reference_mesh)
+        relative_l2_residual = _compute_relative_l2_error(
+            total, residual_scales.get("reference_source_l2_sq")
+        )
+        model.relative_fixed_l2_residual_history.append(relative_l2_residual)
 
-        print(f"[Fixed residual MC] Total: {total:.6e}, RMS(est): {rms:.6e}")
+        print(
+            "[Fixed residual MC] "
+            f"Total: {total:.6e}, Relative L2(est): {relative_l2_residual:.6e}, "
+            f"RMS(est): {rms:.6e}"
+        )
     except Exception as e:
         if not hasattr(model, "fixed_total_residual_history"):
             model.fixed_total_residual_history = []
+        if not hasattr(model, "relative_fixed_l2_residual_history"):
+            model.relative_fixed_l2_residual_history = []
         model.fixed_total_residual_history.append(float("nan"))
+        model.relative_fixed_l2_residual_history.append(float("nan"))
         print(f"[Fixed residual MC] failed: {e}")
 
 
@@ -313,10 +526,21 @@ def compute_model_residual_rms_on_reference(model, reference_mesh, iteration=Non
 
     if not hasattr(model, "fixed_rms_residual_history"):
         model.fixed_rms_residual_history = []
+    if not hasattr(model, "relative_fixed_rms_residual_history"):
+        model.relative_fixed_rms_residual_history = []
     model.fixed_rms_residual_history.append(rms)
+    residual_scales = _ensure_reference_residual_scales(
+        model, reference_mesh, ref_coords=ref_coords
+    )
+    relative_rms = _compute_relative_scale_error(
+        rms, residual_scales.get("reference_source_rms")
+    )
+    model.relative_fixed_rms_residual_history.append(relative_rms)
 
     try:
-        print(f"[Fixed residual RMS] RMS: {rms:.6e}")
+        print(
+            f"[Fixed residual RMS] RMS: {rms:.6e}, Relative RMS: {relative_rms:.6e}"
+        )
     except Exception:
         print(f"[Fixed residual RMS] RMS: {rms}")
 
@@ -364,9 +588,15 @@ def compute_model_error_rms_on_reference(
         diff2 = diff2[_np.isfinite(diff2)]
         rms = float(_np.sqrt(_np.mean(diff2))) if diff2.size > 0 else float("nan")
 
-    if not hasattr(model, "total_error_rms_history"):
-        model.total_error_rms_history = []
-    model.total_error_rms_history.append(rms)
+    scales = _ensure_reference_error_scales(
+        model, reference_mesh, reference_solution, reference_values=u_ref
+    )
+    relative_rms = _compute_relative_scale_error(
+        rms, scales.get("reference_vertex_rms")
+    )
+
+    _append_history_value(model, "total_error_rms_history", rms)
+    _append_history_value(model, "relative_error_rms_history", relative_rms)
 
 
 def compute_model_error(
@@ -412,6 +642,11 @@ def compute_model_error(
     # Store error history
     model.total_error_history.append(total_error)
     model.boundary_error_history.append(boundary_error)
+    scales = _ensure_reference_error_scales(model, reference_mesh, reference_solution)
+    relative_l2 = _compute_relative_l2_error(
+        total_error, scales.get("reference_l2_sq")
+    )
+    _append_history_value(model, "relative_l2_error_history", relative_l2)
 
     # Also compute RMS of residuals on the same reference mesh (evaluation-only)
     try:
@@ -456,10 +691,13 @@ def compute_model_error(
             error_gf,  # Use GridFunction instead of CoefficientFunction
             fieldname="errors",
             filename=f"errors_{iteration}.png",
+            output_dir=_model_images_dir(model),
         )
 
     print(
-        f"Total Error (vs reference): {total_error:.6e}, Boundary Error: {boundary_error:.6e}"
+        "Error integral (vs reference): "
+        f"{total_error:.6e}, Relative L2 error: {relative_l2:.6e}, "
+        f"Boundary Error: {boundary_error:.6e}"
     )
 
 
@@ -502,6 +740,7 @@ def refine_mesh(model, fe_space, mesh, export_images=False, iteration=None):
             residuals,
             fieldname="residuals",
             filename=f"residuals_{iteration}.png",
+            output_dir=_model_images_dir(model),
         )
 
     # Mark elements for refinement based on error indicator
@@ -744,8 +983,9 @@ def compute_random_residuals(
         export_to_png(
             initial_mesh,
             residuals,
-            fieldname="random_residuals",
-            filename=f"random_residuals_{iteration}.png",
+            fieldname="residuals",
+            filename=f"residuals_{iteration}.png",
+            output_dir=_model_images_dir(model),
         )
 
     print(
@@ -807,6 +1047,11 @@ def compute_random_model_error(
 
     model.total_error_history.append(total_error)
     model.boundary_error_history.append(boundary_error)
+    scales = _ensure_reference_error_scales(model, reference_mesh, reference_solution)
+    relative_l2 = _compute_relative_l2_error(
+        total_error, scales.get("reference_l2_sq")
+    )
+    _append_history_value(model, "relative_l2_error_history", relative_l2)
 
     # Also compute RMS of residuals on the same reference mesh (evaluation-only)
     try:
@@ -849,10 +1094,13 @@ def compute_random_model_error(
         export_to_png(
             reference_mesh,
             error_gf,  # Use GridFunction instead of CoefficientFunction
-            fieldname="random_errors",
-            filename=f"random_errors_{iteration}.png",
+            fieldname="errors",
+            filename=f"errors_{iteration}.png",
+            output_dir=_model_images_dir(model),
         )
 
     print(
-        f"Random Model - Total Error (vs reference): {total_error:.6e}, Boundary Error: {boundary_error:.6e}"
+        "Random Model - Error integral (vs reference): "
+        f"{total_error:.6e}, Relative L2 error: {relative_l2:.6e}, "
+        f"Boundary Error: {boundary_error:.6e}"
     )

@@ -4,7 +4,9 @@ Contains the main experiment orchestration functions.
 """
 
 import copy
+import csv
 import itertools
+import json
 import os
 import time
 
@@ -27,7 +29,15 @@ from config import (
 from fem_solver import create_dataset, export_fem_solution, solve_FEM
 from geometry import export_vertex_coordinates
 from methods import get_method, list_methods
-from paths import generate_run_id, images_dir, reports_dir, set_active_run, write_run_metadata
+from paths import (
+    comparison_images_dir,
+    generate_run_id,
+    method_reports_dir,
+    reports_dir,
+    set_active_run,
+    write_run_manifest,
+    write_run_metadata,
+)
 from pinn_model import FeedForward
 from problems import get_problem
 from training import train_model
@@ -72,6 +82,34 @@ def _record_iteration_runtime(model, runtime_sec: float):
     model.cumulative_runtime_history.append(cumulative)
 
 
+def _json_safe(value):
+    if value is None:
+        return None
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    try:
+        return float(value)
+    except Exception:
+        return str(value)
+
+
+def _record_method_iteration_log(model, method, iteration: int, mesh):
+    if not hasattr(model, "method_iteration_logs"):
+        model.method_iteration_logs = []
+    try:
+        raw_log = method.log_iteration(iteration, mesh, model) or {}
+    except Exception as exc:
+        raw_log = {
+            "method": getattr(method, "name", "unknown"),
+            "iteration": int(iteration),
+            "log_error": str(exc),
+        }
+    normalized = {key: _json_safe(val) for key, val in raw_log.items()}
+    normalized.setdefault("method", getattr(method, "name", "unknown"))
+    normalized.setdefault("iteration", int(iteration))
+    model.method_iteration_logs.append(normalized)
+
+
 def _log_comparison_budget_policy(epochs: int, methods_to_run: list[str]):
     point_budget_source = (
         "mesh-refinement method iteration-start point counts"
@@ -98,7 +136,9 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(
             method_name,
-            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            refinement_threshold=HYBRID_ADAPTIVE_CONFIG.get(
+                "refinement_threshold", MESH_CONFIG["refinement_threshold"]
+            ),
             domain_bounds=domain_bounds,
             anchor_count=HYBRID_ADAPTIVE_CONFIG["anchor_count"],
             alpha=HYBRID_ADAPTIVE_CONFIG["alpha"],
@@ -196,6 +236,7 @@ def run_mesh_refinement_method_training_fair(
     model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
     if initial_state_dict is not None:
         model.load_state_dict(copy.deepcopy(initial_state_dict))
+    model.method_name = method_name
 
     # Store reference solution in model for consistent error assessment
     model.reference_mesh = reference_mesh
@@ -246,6 +287,7 @@ def run_mesh_refinement_method_training_fair(
         model.mesh_point_count_history.append(len(next_x))
 
         _record_iteration_runtime(model, time.perf_counter() - iter_start)
+        _record_method_iteration_log(model, method, iteration, current_mesh)
         print(
             f"Iteration {iteration + 1} completed. Current mesh: {len(model.mesh_x):,} points"
         )
@@ -347,6 +389,7 @@ def run_method_training_fair(
     model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
     if initial_state_dict is not None:
         model.load_state_dict(copy.deepcopy(initial_state_dict))
+    model.method_name = method_name
     model.reference_mesh = reference_mesh
     model.reference_solution = reference_solution
 
@@ -431,6 +474,7 @@ def run_method_training_fair(
             )
 
         _record_iteration_runtime(model, time.perf_counter() - iter_start)
+        _record_method_iteration_log(model, method, iteration, initial_mesh)
 
         # Record point count
         model.mesh_point_count_history.append(actual_count)
@@ -611,12 +655,31 @@ def run_complete_experiment(
             create_multi_method_visualizations(
                 trained_models,
                 dataset_size=len(shared_training_dataset),
-                output_dir=images_dir(),
+                output_dir=comparison_images_dir(),
                 include_gifs=create_gifs and export_images,
                 cleanup_pngs=True,
             )
         except Exception as e:
             print(f"Warning: Failed to create multi-method visualizations: {e}")
+    try:
+        write_method_report_bundle(trained_models)
+    except Exception as e:
+        print(f"Warning: Failed to write per-method report bundle: {e}")
+    try:
+        write_run_manifest(
+            methods=sorted(trained_models.keys()),
+            extra={
+                "problem_name": problem.name,
+                "seed": seed,
+                "mesh_size": mesh_size,
+                "iterations": num_adaptations,
+                "epochs": epochs,
+                "export_images": export_images,
+                "generate_report": generate_report,
+            },
+        )
+    except Exception as e:
+        print(f"Warning: Failed to write run manifest: {e}")
 
     print(f"\n{'='*80}")
     print("EXPERIMENT COMPLETED SUCCESSFULLY")
@@ -631,111 +694,246 @@ def write_multi_method_histories_csv(trained_models: dict):
     Args:
         trained_models: Dictionary mapping method names to trained models
     """
-    import csv
-
     output_path = os.path.join(reports_dir(), "all_methods_histories.csv")
 
     # Collect all data
     rows = []
     for method_name, model in trained_models.items():
-        # Get error history
-        total_errors = getattr(model, "total_error_history", [])
-        total_error_rms = getattr(model, "total_error_rms_history", [])
-        boundary_errors = getattr(model, "boundary_error_history", [])
-        total_residuals = getattr(model, "total_residual_history", [])
-        fixed_total_residuals = getattr(model, "fixed_total_residual_history", [])
-        fixed_boundary_residuals = getattr(
-            model, "fixed_boundary_residual_history", []
+        rows.extend(_collect_method_history_rows(method_name, model))
+
+    _write_history_csv(rows, output_path)
+
+    print(f"Multi-method histories written to: {output_path}")
+
+
+def _history_csv_fieldnames():
+    return [
+        "method",
+        "iteration",
+        "total_error",
+        "relative_l2_error",
+        "total_error_rms",
+        "relative_error_rms",
+        "boundary_error",
+        "fixed_total_residual",
+        "relative_fixed_l2_residual",
+        "fixed_boundary_residual",
+        "fixed_rms_residual",
+        "relative_fixed_rms_residual",
+        "point_count",
+        "iteration_runtime_sec",
+        "cumulative_runtime_sec",
+    ]
+
+
+def _collect_method_history_rows(method_name: str, model) -> list[dict]:
+    total_errors = getattr(model, "total_error_history", [])
+    relative_l2_errors = getattr(model, "relative_l2_error_history", [])
+    total_error_rms = getattr(model, "total_error_rms_history", [])
+    relative_error_rms = getattr(model, "relative_error_rms_history", [])
+    boundary_errors = getattr(model, "boundary_error_history", [])
+    fixed_total_residuals = getattr(model, "fixed_total_residual_history", [])
+    relative_fixed_l2_residuals = getattr(
+        model, "relative_fixed_l2_residual_history", []
+    )
+    fixed_boundary_residuals = getattr(model, "fixed_boundary_residual_history", [])
+    fixed_rms_residuals = getattr(model, "fixed_rms_residual_history", [])
+    relative_fixed_rms_residuals = getattr(
+        model, "relative_fixed_rms_residual_history", []
+    )
+    iteration_point_counts = getattr(model, "iteration_point_count_history", [])
+    point_counts = getattr(model, "mesh_point_count_history", [])
+    iteration_runtime = getattr(model, "iteration_runtime_history", [])
+    cumulative_runtime = getattr(model, "cumulative_runtime_history", [])
+
+    num_rows = max(
+        len(total_errors),
+        len(relative_l2_errors),
+        len(total_error_rms),
+        len(relative_error_rms),
+        len(boundary_errors),
+        len(fixed_total_residuals),
+        len(relative_fixed_l2_residuals),
+        len(fixed_boundary_residuals),
+        len(fixed_rms_residuals),
+        len(relative_fixed_rms_residuals),
+        len(iteration_point_counts),
+        len(iteration_runtime),
+        len(cumulative_runtime),
+        max(len(point_counts) - 1, 0),
+    )
+
+    rows = []
+    for i in range(num_rows):
+        if i < len(iteration_point_counts):
+            point_count = iteration_point_counts[i]
+        elif i < len(point_counts):
+            point_count = point_counts[i]
+        else:
+            point_count = None
+        rows.append(
+            {
+                "method": method_name,
+                "iteration": i,
+                "total_error": total_errors[i] if i < len(total_errors) else None,
+                "relative_l2_error": (
+                    relative_l2_errors[i] if i < len(relative_l2_errors) else None
+                ),
+                "total_error_rms": (
+                    total_error_rms[i] if i < len(total_error_rms) else None
+                ),
+                "relative_error_rms": (
+                    relative_error_rms[i] if i < len(relative_error_rms) else None
+                ),
+                "boundary_error": (
+                    boundary_errors[i] if i < len(boundary_errors) else None
+                ),
+                "fixed_total_residual": (
+                    fixed_total_residuals[i] if i < len(fixed_total_residuals) else None
+                ),
+                "relative_fixed_l2_residual": (
+                    relative_fixed_l2_residuals[i]
+                    if i < len(relative_fixed_l2_residuals)
+                    else None
+                ),
+                "fixed_boundary_residual": (
+                    fixed_boundary_residuals[i]
+                    if i < len(fixed_boundary_residuals)
+                    else None
+                ),
+                "fixed_rms_residual": (
+                    fixed_rms_residuals[i] if i < len(fixed_rms_residuals) else None
+                ),
+                "relative_fixed_rms_residual": (
+                    relative_fixed_rms_residuals[i]
+                    if i < len(relative_fixed_rms_residuals)
+                    else None
+                ),
+                "point_count": point_count,
+                "iteration_runtime_sec": (
+                    iteration_runtime[i] if i < len(iteration_runtime) else None
+                ),
+                "cumulative_runtime_sec": (
+                    cumulative_runtime[i] if i < len(cumulative_runtime) else None
+                ),
+            }
         )
-        fixed_rms_residuals = getattr(model, "fixed_rms_residual_history", [])
-        iteration_point_counts = getattr(model, "iteration_point_count_history", [])
-        point_counts = getattr(model, "mesh_point_count_history", [])
-        iteration_runtime = getattr(model, "iteration_runtime_history", [])
-        cumulative_runtime = getattr(model, "cumulative_runtime_history", [])
+    return rows
 
-        num_rows = max(
-            len(total_errors),
-            len(total_error_rms),
-            len(boundary_errors),
-            len(total_residuals),
-            len(fixed_total_residuals),
-            len(fixed_boundary_residuals),
-            len(fixed_rms_residuals),
-            len(iteration_point_counts),
-            len(iteration_runtime),
-            len(cumulative_runtime),
-            max(len(point_counts) - 1, 0),
-        )
 
-        for i in range(num_rows):
-            if i < len(iteration_point_counts):
-                point_count = iteration_point_counts[i]
-            elif i < len(point_counts):
-                point_count = point_counts[i]
-            else:
-                point_count = None
-            rows.append(
-                {
-                    "method": method_name,
-                    "iteration": i,
-                    "total_error": total_errors[i] if i < len(total_errors) else None,
-                    "total_error_rms": (
-                        total_error_rms[i] if i < len(total_error_rms) else None
-                    ),
-                    "boundary_error": (
-                        boundary_errors[i] if i < len(boundary_errors) else None
-                    ),
-                    "total_residual": (
-                        total_residuals[i] if i < len(total_residuals) else None
-                    ),
-                    "fixed_total_residual": (
-                        fixed_total_residuals[i]
-                        if i < len(fixed_total_residuals)
-                        else None
-                    ),
-                    "fixed_boundary_residual": (
-                        fixed_boundary_residuals[i]
-                        if i < len(fixed_boundary_residuals)
-                        else None
-                    ),
-                    "fixed_rms_residual": (
-                        fixed_rms_residuals[i]
-                        if i < len(fixed_rms_residuals)
-                        else None
-                    ),
-                    "point_count": point_count,
-                    "iteration_runtime_sec": (
-                        iteration_runtime[i] if i < len(iteration_runtime) else None
-                    ),
-                    "cumulative_runtime_sec": (
-                        cumulative_runtime[i] if i < len(cumulative_runtime) else None
-                    ),
-                }
-            )
-
-    # Write CSV
+def _write_history_csv(rows: list[dict], output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "method",
-                "iteration",
-                "total_error",
-                "total_error_rms",
-                "boundary_error",
-                "total_residual",
-                "fixed_total_residual",
-                "fixed_boundary_residual",
-                "fixed_rms_residual",
-                "point_count",
-                "iteration_runtime_sec",
-                "cumulative_runtime_sec",
-            ],
-        )
+        writer = csv.DictWriter(f, fieldnames=_history_csv_fieldnames())
         writer.writeheader()
         writer.writerows(rows)
 
-    print(f"Multi-method histories written to: {output_path}")
+
+def _method_diagnostics_payload(method_name: str, model) -> dict:
+    def _final(history_name: str):
+        values = getattr(model, history_name, None) or []
+        return _json_safe(values[-1]) if values else None
+
+    return {
+        "method": method_name,
+        "final_metrics": {
+            "total_error": _final("total_error_history"),
+            "relative_l2_error": _final("relative_l2_error_history"),
+            "total_error_rms": _final("total_error_rms_history"),
+            "relative_error_rms": _final("relative_error_rms_history"),
+            "boundary_error": _final("boundary_error_history"),
+            "fixed_total_residual": _final("fixed_total_residual_history"),
+            "relative_fixed_l2_residual": _final(
+                "relative_fixed_l2_residual_history"
+            ),
+            "fixed_boundary_residual": _final("fixed_boundary_residual_history"),
+            "fixed_rms_residual": _final("fixed_rms_residual_history"),
+            "relative_fixed_rms_residual": _final(
+                "relative_fixed_rms_residual_history"
+            ),
+            "point_count": _final("mesh_point_count_history"),
+            "cumulative_runtime_sec": _final("cumulative_runtime_history"),
+        },
+        "history_lengths": {
+            "total_error": len(getattr(model, "total_error_history", []) or []),
+            "relative_l2_error": len(
+                getattr(model, "relative_l2_error_history", []) or []
+            ),
+            "total_error_rms": len(
+                getattr(model, "total_error_rms_history", []) or []
+            ),
+            "relative_error_rms": len(
+                getattr(model, "relative_error_rms_history", []) or []
+            ),
+            "fixed_total_residual": len(
+                getattr(model, "fixed_total_residual_history", []) or []
+            ),
+            "relative_fixed_l2_residual": len(
+                getattr(model, "relative_fixed_l2_residual_history", []) or []
+            ),
+            "relative_fixed_rms_residual": len(
+                getattr(model, "relative_fixed_rms_residual_history", []) or []
+            ),
+            "point_count": len(getattr(model, "mesh_point_count_history", []) or []),
+            "iteration_runtime": len(
+                getattr(model, "iteration_runtime_history", []) or []
+            ),
+            "iteration_diagnostics": len(
+                getattr(model, "method_iteration_logs", []) or []
+            ),
+        },
+        "latest_iteration_diagnostics": (
+            (getattr(model, "method_iteration_logs", []) or [])[-1]
+            if (getattr(model, "method_iteration_logs", []) or [])
+            else None
+        ),
+        "artifacts": {
+            "history_csv": os.path.join(method_reports_dir(method_name), "history.csv"),
+            "iteration_diagnostics_csv": os.path.join(
+                method_reports_dir(method_name), "iteration_diagnostics.csv"
+            ),
+            "diagnostics_json": os.path.join(
+                method_reports_dir(method_name), "diagnostics.json"
+            ),
+        },
+    }
+
+
+def write_method_report_bundle(trained_models: dict):
+    """Write per-method histories and diagnostics under reports/methods/<name>/."""
+    for method_name, model in sorted(trained_models.items()):
+        method_dir = method_reports_dir(method_name)
+        history_path = os.path.join(method_dir, "history.csv")
+        iteration_log_path = os.path.join(method_dir, "iteration_diagnostics.csv")
+        diagnostics_path = os.path.join(method_dir, "diagnostics.json")
+        rows = _collect_method_history_rows(method_name, model)
+        _write_history_csv(rows, history_path)
+        _write_generic_csv(getattr(model, "method_iteration_logs", []) or [], iteration_log_path)
+        with open(diagnostics_path, "w") as f:
+            json.dump(_method_diagnostics_payload(method_name, model), f, indent=2)
+        print(f"Per-method report bundle written to: {method_dir}")
+
+
+def _write_generic_csv(rows: list[dict], output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    if not rows:
+        with open(output_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["method", "iteration"])
+        return
+
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def run_hyperparameter_study(

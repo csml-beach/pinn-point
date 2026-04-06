@@ -45,7 +45,9 @@ class RandomResamplingMethod(TrainingMethod):
         self._cached_points = None
         self._last_resample_iteration = -1
 
-    def _generate_random_points(self, num_points: int, mesh: Any) -> np.ndarray:
+    def _generate_random_points(
+        self, num_points: int, mesh: Any, iteration: int | None = None
+    ) -> np.ndarray:
         """Generate uniform random points using rejection sampling.
 
         Args:
@@ -68,6 +70,8 @@ class RandomResamplingMethod(TrainingMethod):
             ),
             max_batches=20,
             warn_label="random points",
+            method_name=self.name,
+            iteration=iteration,
         )
 
     def get_collocation_points(
@@ -98,7 +102,9 @@ class RandomResamplingMethod(TrainingMethod):
         )
 
         if should_resample:
-            points = self._generate_random_points(num_points, mesh)
+            points = self._generate_random_points(
+                num_points, mesh, iteration=iteration
+            )
             self._cached_points = points
             self._last_resample_iteration = iteration
         else:

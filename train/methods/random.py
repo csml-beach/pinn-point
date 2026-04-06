@@ -67,6 +67,8 @@ class RandomMethod(TrainingMethod):
             ),
             max_batches=20,
             warn_label="random points",
+            method_name=self.name,
+            iteration=iteration,
         )
         return points_to_tensors(points)
 

@@ -15,7 +15,7 @@ The core experiment idea is a **fair comparison**: all methods share the same la
 ```
 pinn-point/
 ├── train/                    # Core Python modules
-│   ├── main.py              # CLI entrypoint (main, smoke, hparams, cleanup, cleanup-all, ablate-plot)
+│   ├── main.py              # CLI entrypoint (main, dev, screen, smoke, hparams, cleanup, cleanup-all, ablate-plot)
 │   ├── experiments.py       # Experiment orchestration
 │   ├── pinn_model.py        # FeedForward neural network class
 │   ├── training.py          # Model training, optimizer setup
@@ -56,6 +56,8 @@ pinn-point/
 
 **CLI Commands**:
 - `main` — Run the default experiment configuration
+- `dev` — Run the lean development profile for fast iteration
+- `screen` — Run the stronger screening profile before heavier confirmatory runs
 - `smoke` — Run a minimal end-to-end smoke test
 - `hparams` — Hyperparameter study
 - `ablate-plot` — Generate ablation summary plots
@@ -69,7 +71,7 @@ pinn-point/
 | `MODEL_CONFIG` | Network architecture, loss weights |
 | `TRAINING_CONFIG` | Epochs, learning rate, iterations |
 | `MESH_CONFIG` | Initial mesh size, refinement threshold |
-| `HYBRID_ADAPTIVE_CONFIG` | Hybrid anchor count, blend weights, normalization quantile |
+| `HYBRID_ADAPTIVE_CONFIG` | Hybrid anchor count, blend weights, normalization quantile, hybrid refinement threshold |
 | `GEOMETRY_CONFIG` | Domain size, shape parameters |
 | `VIZ_CONFIG` | Image sizes, colormaps |
 
@@ -150,7 +152,7 @@ METHOD_REGISTRY["your_method"] = YourMethod
 
 **Equation**: $-\nabla^2 u = f(x,y)$ where $f(x,y) = xy$
 
-**Domain**: Complex geometry with holes (L-shaped region with patterns), size 5×5
+**Domain**: Perforated square domain with repeated cross/circle cutout patterns, size 5×5
 
 **Boundary Conditions**: Dirichlet $u = 0$ on bottom boundary
 
@@ -189,8 +191,14 @@ The problem abstraction is now on the active training path, but the Poisson prob
 
 Each run creates `outputs/<timestamp>_<name>/`:
 ```
-├── images/           # comparison plots and per-method convergence figures
-├── reports/          # all_methods_histories.csv, run_config.json, summaries
+├── images/
+│   ├── comparison/   # cross-method comparison plots
+│   └── methods/      # method-local images grouped by method name
+├── reports/
+│   ├── methods/      # per-method histories, diagnostics, and sampling stats
+│   ├── all_methods_histories.csv
+│   ├── run_config.json
+│   └── run_manifest.json
 ├── checkpoints/      # Model weights (optional)
 └── artifacts/        # Additional outputs
 ```
@@ -200,6 +208,13 @@ Canonical report artifacts:
 - `reports/performance_summary.txt`
 - `reports/point_usage_table.txt`
 - `reports/run_config.json`
+- `reports/run_manifest.json`
+
+Per-method report artifacts:
+- `reports/methods/<method>/history.csv`
+- `reports/methods/<method>/diagnostics.json`
+- `reports/methods/<method>/iteration_diagnostics.csv`
+- `reports/methods/<method>/sampling_stats.txt`
 
 ## Files to Never Commit
 

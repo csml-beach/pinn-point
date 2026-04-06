@@ -5,7 +5,7 @@ Solves the Poisson equation:
     -∇²u = f(x,y)  in Ω
     u = 0          on Γ_D (Dirichlet boundary)
 
-where f(x,y) = x*y is the source term.
+where f(x,y) is a localized multi-bump source term.
 
 This is the default problem used in the PINN adaptive mesh refinement experiments.
 """
@@ -17,14 +17,22 @@ from .base import PDEProblem
 
 
 class PoissonProblem(PDEProblem):
-    """Poisson equation with source term f(x,y) = x*y.
+    """Poisson equation with a localized multi-bump source term.
 
-    Domain: Complex geometry with holes (L-shaped region with patterns)
+    Domain: Perforated square domain with repeated cutout patterns
     Boundary conditions: Dirichlet u=0 on bottom boundary
     """
 
     name = "poisson"
-    description = "Poisson equation: -∇²u = x*y with Dirichlet BC on bottom"
+    description = (
+        "Poisson equation: -∇²u = sum of localized Gaussian bumps with Dirichlet BC on bottom"
+    )
+
+    _BUMPS = (
+        (1.67, 4.15, 18.0, 0.18),
+        (3.33, 4.15, 18.0, 0.18),
+        (2.50, 3.35, 10.0, 0.22),
+    )
 
     def __init__(self, domain_size: float = 5.0):
         """Initialize Poisson problem.
@@ -34,10 +42,26 @@ class PoissonProblem(PDEProblem):
         """
         self.domain_size = domain_size
 
+    def _source_term_torch(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        source = torch.zeros_like(x)
+        for x0, y0, amplitude, sigma in self._BUMPS:
+            radius_sq = (x - x0) ** 2 + (y - y0) ** 2
+            source = source + amplitude * torch.exp(
+                -radius_sq / (2.0 * sigma * sigma)
+            )
+        return source
+
+    def _source_term_ngsolve(self):
+        source = 0
+        for x0, y0, amplitude, sigma in self._BUMPS:
+            radius_sq = (x - x0) * (x - x0) + (y - y0) * (y - y0)
+            source = source + amplitude * exp(-radius_sq / (2.0 * sigma * sigma))
+        return source
+
     def pde_residual(
         self, model: Any, x: torch.Tensor, y: torch.Tensor
     ) -> torch.Tensor:
-        """Compute PDE residual: ∇²u + f = 0 (or equivalently, ∇²u + x*y = 0).
+        """Compute PDE residual: ∇²u + f = 0.
 
         Args:
             model: Neural network with forward(x, y) method
@@ -62,9 +86,8 @@ class PoissonProblem(PDEProblem):
         d2u_dx2 = self.compute_derivative(u, x, 2)
         d2u_dy2 = self.compute_derivative(u, y, 2)
 
-        # PDE residual: ∇²u + f = 0, where f = x*y
-        # residual = d2u/dx2 + d2u/dy2 + x*y
-        residual = d2u_dx2 + d2u_dy2 + x * y
+        # PDE residual: ∇²u + f = 0
+        residual = d2u_dx2 + d2u_dy2 + self._source_term_torch(x, y)
 
         return residual
 
@@ -97,7 +120,7 @@ class PoissonProblem(PDEProblem):
         return loss_bc
 
     def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-        """Evaluate source term f(x,y) = x*y.
+        """Evaluate the localized source term f(x,y).
 
         Args:
             x: x-coordinates
@@ -106,7 +129,9 @@ class PoissonProblem(PDEProblem):
         Returns:
             Source term values
         """
-        return x * y
+        x = torch.as_tensor(x, dtype=torch.float32)
+        y = torch.as_tensor(y, dtype=torch.float32)
+        return self._source_term_torch(x, y)
 
     def solve_fem(self, mesh) -> Tuple[Any, Any]:
         """Solve Poisson equation using NGSolve FEM.
@@ -127,8 +152,8 @@ class PoissonProblem(PDEProblem):
         # Bilinear form: a(u,v) = ∫ ∇u·∇v dx
         a = BilinearForm(grad(u) * grad(v) * dx)
 
-        # Linear form: f(v) = ∫ f*v dx, where f(x,y) = x*y
-        f_source = x * y  # NGSolve coordinate functions
+        # Linear form: f(v) = ∫ f*v dx for the localized source term
+        f_source = self._source_term_ngsolve()
         f = LinearForm(f_source * v * dx)
 
         # Assemble and solve

@@ -12,7 +12,12 @@ import numpy as np
 from config import VIZ_CONFIG
 import matplotlib
 import matplotlib.pyplot as plt
-from paths import images_dir, reports_dir
+from paths import (
+    comparison_images_dir,
+    images_dir,
+    method_images_dir,
+    reports_dir,
+)
 
 
 # Configure matplotlib backend before using pyplot
@@ -29,7 +34,7 @@ except ImportError:
     print("Warning: PyVista not available. 3D mesh visualizations will be disabled.")
 
 
-def export_to_png(mesh, gfu, fieldname, filename, size=None):
+def export_to_png(mesh, gfu, fieldname, filename, size=None, output_dir=None):
     """Export mesh solution to PNG image using PyVista.
 
     Args:
@@ -38,6 +43,7 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
         fieldname: Name of the field for visualization
         filename: Output filename
         size: Image size (uses config default if None)
+        output_dir: Output directory (uses root images dir if None)
 
     Returns:
         None
@@ -48,6 +54,9 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
 
     if size is None:
         size = VIZ_CONFIG["image_size"]
+    if output_dir is None:
+        output_dir = images_dir()
+    os.makedirs(output_dir, exist_ok=True)
 
     # Import NGSolve functions on demand
     try:
@@ -127,7 +136,7 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
                 plotter.scalar_bar.SetLabelFormat("%2.2e")
 
                 # Save screenshot using off-screen rendering
-                output_path = os.path.join(images_dir(), filename)
+                output_path = os.path.join(output_dir, filename)
                 plotter.screenshot(output_path)
                 plotter.close()  # Explicitly close the plotter
                 print(f"Exported visualization to {output_path}")
@@ -180,7 +189,7 @@ def export_to_png(mesh, gfu, fieldname, filename, size=None):
                     plotter.scalar_bar.SetHeight(0.7)
                     plotter.scalar_bar.SetLabelFormat("%2.2e")
 
-                    output_path = os.path.join(images_dir(), filename)
+                    output_path = os.path.join(output_dir, filename)
                     plotter.show(screenshot=output_path)
                     print(f"Exported visualization to {output_path}")
                 except Exception as e2:
@@ -425,6 +434,7 @@ def create_multi_method_performance_summary(trained_models: dict, save_path: str
     """Create a concise text summary for all trained methods."""
     lines = ["PINN EXPERIMENT SUMMARY", "=" * 50, ""]
     ranking: list[tuple[float, str]] = []
+    ranking_metric = "error integral"
 
     for method_name, model in sorted(trained_models.items()):
         label = _method_label(method_name)
@@ -438,17 +448,47 @@ def create_multi_method_performance_summary(trained_models: dict, save_path: str
             lines.append(f"  Points: {initial:,} -> {final:,} (x{growth:.2f})")
 
         total_error = _history_as_array(model, "total_error_history")
-        if total_error.size:
-            lines.append(f"  Final total error: {total_error[-1]:.6e}")
+        relative_l2 = _history_as_array(model, "relative_l2_error_history")
+        if relative_l2.size:
+            lines.append(f"  Final relative L2 error: {relative_l2[-1]:.6e}")
+            ranking.append((relative_l2[-1], method_name))
+            ranking_metric = "relative L2 error"
+        elif total_error.size:
             ranking.append((total_error[-1], method_name))
+        if total_error.size:
+            lines.append(f"  Final error integral: {total_error[-1]:.6e}")
 
         total_error_rms = _history_as_array(model, "total_error_rms_history")
+        relative_error_rms = _history_as_array(model, "relative_error_rms_history")
         if total_error_rms.size:
             lines.append(f"  Final RMS error: {total_error_rms[-1]:.6e}")
+        if relative_error_rms.size:
+            lines.append(f"  Final relative RMS error: {relative_error_rms[-1]:.6e}")
 
         fixed_residual = _history_as_array(model, "fixed_total_residual_history")
+        relative_fixed_l2_residual = _history_as_array(
+            model, "relative_fixed_l2_residual_history"
+        )
+        fixed_rms_residual = _history_as_array(model, "fixed_rms_residual_history")
+        relative_fixed_rms_residual = _history_as_array(
+            model, "relative_fixed_rms_residual_history"
+        )
         if fixed_residual.size:
             lines.append(f"  Final fixed residual integral: {fixed_residual[-1]:.6e}")
+        if relative_fixed_l2_residual.size:
+            lines.append(
+                "  Final relative fixed L2 residual: "
+                f"{relative_fixed_l2_residual[-1]:.6e}"
+            )
+        if fixed_rms_residual.size:
+            lines.append(
+                f"  Final fixed reference-mesh RMS residual: {fixed_rms_residual[-1]:.6e}"
+            )
+        if relative_fixed_rms_residual.size:
+            lines.append(
+                "  Final relative fixed RMS residual: "
+                f"{relative_fixed_rms_residual[-1]:.6e}"
+            )
 
         runtime = _history_as_array(model, "cumulative_runtime_history")
         if runtime.size:
@@ -457,7 +497,7 @@ def create_multi_method_performance_summary(trained_models: dict, save_path: str
         lines.append("")
 
     if ranking:
-        lines.append("FINAL ERROR RANKING:")
+        lines.append(f"FINAL ERROR RANKING ({ranking_metric}):")
         for idx, (_, method_name) in enumerate(sorted(ranking), start=1):
             lines.append(f"  {idx}. {_method_label(method_name)}")
 
@@ -969,7 +1009,7 @@ def create_essential_visualizations(
         cleanup_pngs: Whether to clean up PNG files after GIF creation
     """
     if output_dir is None:
-        output_dir = images_dir()
+        output_dir = comparison_images_dir()
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -1021,14 +1061,14 @@ def create_essential_visualizations(
     plot_points_vs_iteration(adaptive_model, points_path)
 
     # 3. Training convergence plots
-    adaptive_training_path = os.path.join(
-        output_dir, "adaptive_training_convergence.png"
-    )
+    adaptive_dir = method_images_dir("adaptive")
+    random_dir = method_images_dir("random")
+    adaptive_training_path = os.path.join(adaptive_dir, "training_convergence.png")
     plot_training_convergence_simple(
         adaptive_model, "Adaptive Mesh", adaptive_training_path
     )
 
-    random_training_path = os.path.join(output_dir, "random_training_convergence.png")
+    random_training_path = os.path.join(random_dir, "training_convergence.png")
     plot_training_convergence_simple(
         random_model, "Random Points", random_training_path
     )
@@ -1036,20 +1076,40 @@ def create_essential_visualizations(
     # 4. Evolution GIFs (shows adaptive refinement strategy and error evolution)
     if include_gifs:
         print("Creating adaptive residual evolution GIF...")
-        gif_path = "adaptive_residual_evolution.gif"
-        create_residual_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        create_image_sequence_gif(
+            adaptive_dir,
+            "residuals_",
+            "adaptive_residual_evolution.gif",
+            description="Adaptive residual evolution",
+            cleanup_pngs=cleanup_pngs,
+        )
 
         print("Creating adaptive error evolution GIF...")
-        gif_path = "adaptive_error_evolution.gif"
-        create_error_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        create_image_sequence_gif(
+            adaptive_dir,
+            "errors_",
+            "adaptive_error_evolution.gif",
+            description="Adaptive error evolution",
+            cleanup_pngs=cleanup_pngs,
+        )
 
         print("Creating random residual evolution GIF...")
-        gif_path = "random_residual_evolution.gif"
-        create_random_residual_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        create_image_sequence_gif(
+            random_dir,
+            "residuals_",
+            "random_residual_evolution.gif",
+            description="Random residual evolution",
+            cleanup_pngs=cleanup_pngs,
+        )
 
         print("Creating random error evolution GIF...")
-        gif_path = "random_error_evolution.gif"
-        create_random_error_gif(output_dir, gif_path, cleanup_pngs=cleanup_pngs)
+        create_image_sequence_gif(
+            random_dir,
+            "errors_",
+            "random_error_evolution.gif",
+            description="Random error evolution",
+            cleanup_pngs=cleanup_pngs,
+        )
 
     print(f"Essential visualizations saved to {output_dir}")
     if include_gifs:
@@ -1081,7 +1141,7 @@ def create_detailed_visualizations(
         output_dir: Directory to save plots
     """
     if output_dir is None:
-        output_dir = images_dir()
+        output_dir = comparison_images_dir()
 
     print("Creating detailed visualizations...")
 
@@ -1232,7 +1292,7 @@ def create_multi_method_visualizations(
 ):
     """Create the canonical visualization/report bundle for multi-method runs."""
     if output_dir is None:
-        output_dir = images_dir()
+        output_dir = comparison_images_dir()
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(reports_dir(), exist_ok=True)
 
@@ -1247,10 +1307,26 @@ def create_multi_method_visualizations(
     )
     plot_multi_method_comparison(
         trained_models,
+        "relative_l2_error_history",
+        os.path.join(output_dir, "relative_l2_error_comparison.png"),
+        title="Relative L2 error vs iteration",
+        ylabel="||u-u_ref||_L2 / ||u_ref||_L2",
+        logy=False,
+    )
+    plot_multi_method_comparison(
+        trained_models,
         "total_error_rms_history",
         os.path.join(output_dir, "fixed_error_rms_comparison.png"),
         title="Fixed reference-mesh RMS error",
         ylabel="RMS error (sqrt(mean((u-u_ref)^2)))",
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "relative_error_rms_history",
+        os.path.join(output_dir, "relative_rms_error_comparison.png"),
+        title="Relative RMS error vs iteration",
+        ylabel="RMS(u-u_ref) / RMS(u_ref)",
+        logy=False,
     )
     plot_multi_method_comparison(
         trained_models,
@@ -1261,10 +1337,26 @@ def create_multi_method_visualizations(
     )
     plot_multi_method_comparison(
         trained_models,
+        "relative_fixed_rms_residual_history",
+        os.path.join(output_dir, "relative_fixed_residual_rms_comparison.png"),
+        title="Relative fixed reference-mesh RMS residual",
+        ylabel="RMS(r) / RMS(f)",
+        logy=False,
+    )
+    plot_multi_method_comparison(
+        trained_models,
         "fixed_total_residual_history",
         os.path.join(output_dir, "fixed_residual_integral_comparison.png"),
         title="Fixed reference-mesh residual integral",
         ylabel="∫Ω r(x)^2 dΩ",
+    )
+    plot_multi_method_comparison(
+        trained_models,
+        "relative_fixed_l2_residual_history",
+        os.path.join(output_dir, "relative_fixed_residual_comparison.png"),
+        title="Relative fixed residual L2 vs iteration",
+        ylabel="||r||_L2 / ||f||_L2",
+        logy=False,
     )
     plot_multi_method_comparison(
         trained_models,
@@ -1292,44 +1384,53 @@ def create_multi_method_visualizations(
     )
 
     for method_name, model in sorted(trained_models.items()):
+        method_output_dir = method_images_dir(method_name)
         plot_training_convergence_simple(
             model,
             _method_label(method_name),
-            os.path.join(output_dir, f"{method_name}_training_convergence.png"),
+            os.path.join(method_output_dir, "training_convergence.png"),
         )
 
     if include_gifs:
         if "adaptive" in trained_models:
+            adaptive_dir = method_images_dir("adaptive")
             create_image_sequence_gif(
-                output_dir,
+                adaptive_dir,
                 "residuals_",
                 "adaptive_residual_evolution.gif",
                 description="Adaptive residual evolution",
                 cleanup_pngs=cleanup_pngs,
             )
-        if "random" in trained_models:
             create_image_sequence_gif(
-                output_dir,
-                "random_residuals_",
+                adaptive_dir,
+                "errors_",
+                "adaptive_error_evolution.gif",
+                description="Adaptive error evolution",
+                cleanup_pngs=cleanup_pngs,
+            )
+        if "random" in trained_models:
+            random_dir = method_images_dir("random")
+            create_image_sequence_gif(
+                random_dir,
+                "residuals_",
                 "random_residual_evolution.gif",
                 description="Random residual evolution",
                 cleanup_pngs=cleanup_pngs,
             )
             create_image_sequence_gif(
-                output_dir,
-                "random_errors_",
+                random_dir,
+                "errors_",
                 "random_error_evolution.gif",
                 description="Random error evolution",
                 cleanup_pngs=cleanup_pngs,
             )
-        if "adaptive" in trained_models and set(trained_models).issubset(
-            {"adaptive", "random"}
-        ):
+        for method_name in sorted(set(trained_models) - {"adaptive", "random"}):
+            method_dir = method_images_dir(method_name)
             create_image_sequence_gif(
-                output_dir,
+                method_dir,
                 "errors_",
-                "adaptive_error_evolution.gif",
-                description="Adaptive error evolution",
+                f"{method_name}_error_evolution.gif",
+                description=f"{_method_label(method_name)} error evolution",
                 cleanup_pngs=cleanup_pngs,
             )
 

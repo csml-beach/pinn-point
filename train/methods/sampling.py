@@ -8,6 +8,37 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
+from config import RANDOM_CONFIG
+
+
+def _log_sampling_stats(
+    *,
+    method_name: str | None,
+    iteration: int | None,
+    warn_label: str,
+    requested: int,
+    accepted: int,
+    generated: int,
+):
+    if not RANDOM_CONFIG.get("log_sampling_stats", False):
+        return
+    if not method_name:
+        return
+
+    try:
+        from paths import method_reports_dir
+
+        out_dir = method_reports_dir(method_name)
+        acceptance_rate = accepted / max(generated, 1)
+        iteration_value = iteration if iteration is not None else "n/a"
+        with open(f"{out_dir}/sampling_stats.txt", "a") as f:
+            f.write(
+                f"iteration={iteration_value}, label={warn_label}, "
+                f"requested={requested}, accepted={accepted}, generated={generated}, "
+                f"acceptance_rate={acceptance_rate:.4f}\n"
+            )
+    except Exception:
+        pass
 
 
 def filter_points_in_domain(
@@ -38,6 +69,8 @@ def sample_points_in_domain(
     batch_size: int | None = None,
     max_batches: int = 50,
     warn_label: str = "points",
+    method_name: str | None = None,
+    iteration: int | None = None,
 ) -> np.ndarray:
     """Use batched rejection sampling to generate interior points."""
     if num_points <= 0:
@@ -46,11 +79,13 @@ def sample_points_in_domain(
     batch_size = batch_size or max(256, num_points * 4)
     accepted_batches: list[np.ndarray] = []
     accepted_count = 0
+    generated_count = 0
 
     for _ in range(max_batches):
         candidates = np.asarray(batch_generator(batch_size), dtype=float)
         if candidates.ndim != 2 or candidates.shape[1] != 2:
             raise ValueError("batch_generator must return an array of shape (N, 2)")
+        generated_count += len(candidates)
 
         accepted = filter_points_in_domain(
             mesh, candidates, limit=num_points - accepted_count
@@ -67,6 +102,15 @@ def sample_points_in_domain(
     points = np.vstack(accepted_batches)[:num_points]
     if len(points) < num_points:
         print(f"Warning: Generated {len(points)}/{num_points} {warn_label}")
+
+    _log_sampling_stats(
+        method_name=method_name,
+        iteration=iteration,
+        warn_label=warn_label,
+        requested=num_points,
+        accepted=len(points),
+        generated=generated_count,
+    )
 
     return points
 

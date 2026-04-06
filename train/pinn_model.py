@@ -26,14 +26,18 @@ class FeedForward(nn.Module):
 
         # History tracking
         self.total_error_history = []
+        self.relative_l2_error_history = []
         self.total_error_rms_history = []
+        self.relative_error_rms_history = []
         self.boundary_error_history = []
         self.train_loss_history = []
         self.total_residual_history = []
         self.boundary_residual_history = []
         self.fixed_total_residual_history = []
+        self.relative_fixed_l2_residual_history = []
         self.fixed_boundary_residual_history = []
         self.fixed_rms_residual_history = []
+        self.relative_fixed_rms_residual_history = []
         self.mesh_point_history = []
         self.mesh_point_count_history = []
         self.iteration_point_count_history = []

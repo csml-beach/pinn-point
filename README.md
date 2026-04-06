@@ -5,6 +5,7 @@ This project compares Physics-Informed Neural Networks (PINNs) trained with:
 - **Baseline and competitive methods** — including random, low-discrepancy, and adaptive distributions
 
 The code runs controlled experiments, saves per-run artifacts to `outputs/<run-id>/`, and supports ablation studies across multiple runs and seeds.
+The current default config is a lean iteration profile intended for faster method development, while heavier paper-facing runs can still be launched explicitly.
 
 ## Available Methods
 
@@ -19,10 +20,14 @@ You can benchmark and compare the following methods:
 
 Select methods via CLI/config:
 ```bash
-python3 train/main.py main  # Default: adaptive + random
-python3 train/main.py main --methods adaptive adaptive_hybrid_anchor random halton sobol rad
+python3 train/main.py main  # Main experiment entrypoint
+python3 train/main.py dev   # Lean development profile
+python3 train/main.py screen  # Stronger screening profile
 ```
-Or set `methods_to_run` in your config or experiment script.
+Method selection is currently controlled by CLI mode or by experiment scripts/specs:
+- `dev` defaults to `adaptive`, `random`, `halton`
+- `screen` defaults to `adaptive`, `adaptive_hybrid_anchor`, `random`, `halton`
+- `main` currently runs `adaptive` and `random`
 
 ## Device Selection
 
@@ -52,6 +57,12 @@ PINN_DEVICE=cpu scripts/smoke_test.sh
 ## Quick Start
 
 ```bash
+# Lean development run (recommended inner loop)
+python3 train/main.py dev
+
+# Stronger screening run
+python3 train/main.py screen
+
 # Run a single experiment
 python3 train/main.py main
 
@@ -91,13 +102,16 @@ Edit `train/config.py`:
 | Config | Key settings |
 |--------|--------------|
 | `MODEL_CONFIG` | `hidden_size`, `w_data`, `w_interior`, `w_bc` |
-| `TRAINING_CONFIG` | `epochs`, `iterations`, `lr`, `seed` |
+| `TRAINING_CONFIG` | `epochs`, `iterations`, `optimizer`, `lr`, `seed` |
 | `MESH_CONFIG` | `maxh`, `refinement_threshold` |
-| `HYBRID_ADAPTIVE_CONFIG` | `anchor_count`, `alpha`, `beta`, `normalization_quantile` |
+| `GEOMETRY_CONFIG` | `domain_size`, `grid_n`, `cell_fill`, `circle_radius` |
+| `HYBRID_ADAPTIVE_CONFIG` | `anchor_count`, `alpha`, `beta`, `normalization_quantile`, `refinement_threshold` |
+| `RAD_CONFIG` | `k`, `c`, `num_candidates`, `resample_period` |
 
 ## Documentation
 
 - [Architecture Overview](docs/ARCHITECTURE.md) — code structure and design
+- [Lean Baseline Protocol](docs/lean_baseline_protocol.md) — recommended fast-iteration experiment profile
 - [Parameter Studies](docs/parameter_study.md) — hyperparameter sweeps and ablation plots
 - [Output Format](docs/histories_csv.md) — CSV columns and metrics
 - [Hybrid Adaptive Plan](docs/hybrid_adaptive_plan.md) — anchor-based hybrid refinement design
@@ -106,11 +120,14 @@ Edit `train/config.py`:
 ## Outputs
 
 Each run creates `outputs/<timestamp>_<tag>/`:
-- `images/` — plots and per-method convergence figures
-- `reports/all_methods_histories.csv` — canonical per-method metrics
-- `reports/performance_summary.txt` — summarized end-of-run metrics
+- `images/comparison/` — cross-method comparison plots
+- `images/methods/<method>/` — method-local images such as training convergence and field snapshots
+- `reports/all_methods_histories.csv` — canonical per-method metrics, including raw and normalized error and fixed-reference residual fields
+- `reports/performance_summary.txt` — summarized end-of-run metrics with relative L2/RMS error reporting
 - `reports/point_usage_table.txt` — per-iteration collocation budgets
 - `reports/run_config.json` — full config, system info, git state, seed
+- `reports/run_manifest.json` — index of run directories and artifact locations
+- `reports/methods/<method>/` — method-local `history.csv`, `diagnostics.json`, `iteration_diagnostics.csv`, and `sampling_stats.txt`
 
 ## Reproducibility
 

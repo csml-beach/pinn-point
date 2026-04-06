@@ -5,6 +5,7 @@ This method refines the mesh based on PDE residual error indicators,
 concentrating collocation points in regions with high residual.
 """
 
+import numpy as np
 import torch
 from typing import Tuple, Optional, Any
 from ngsolve import GridFunction, BaseVector, Integrate, VOL, BND, H1
@@ -30,6 +31,7 @@ class AdaptiveMethod(TrainingMethod):
                                   (elements with error > threshold * max_error are refined)
         """
         self.refinement_threshold = refinement_threshold
+        self._last_refinement_stats: dict[str, float | int | bool] = {}
 
     def _compute_residual_indicators(
         self, mesh: Any, model: Any
@@ -109,6 +111,18 @@ class AdaptiveMethod(TrainingMethod):
             mesh.ngmesh.Elements2D().NumPy()["refine"] = eta2_np > 0.0
             was_refined = False
 
+        self._last_refinement_stats = {
+            "iteration": int(iteration),
+            "total_residual": float(total_residual),
+            "boundary_residual": float(boundary_residual),
+            "max_indicator": float(maxerr),
+            "mean_indicator": float(eta2_np.mean()) if len(eta2_np) else 0.0,
+            "refined_elements": int(np.count_nonzero(refine_mask))
+            if maxerr > 0.0
+            else 0,
+            "was_refined": bool(was_refined),
+        }
+
         return mesh, was_refined
 
     def get_error_indicators(self, mesh: Any, model: Any) -> torch.Tensor:
@@ -150,5 +164,8 @@ class AdaptiveMethod(TrainingMethod):
             )
         except Exception:
             pass
+
+        if self._last_refinement_stats:
+            base_log.update(self._last_refinement_stats)
 
         return base_log

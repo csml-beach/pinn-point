@@ -61,7 +61,13 @@ def save_model_checkpoint(model, filepath, additional_info=None):
             "mesh_x": tensor_to_numpy_safe(model.mesh_x),
             "mesh_y": tensor_to_numpy_safe(model.mesh_y),
             "total_error_history": model.total_error_history,
+            "relative_l2_error_history": getattr(
+                model, "relative_l2_error_history", []
+            ),
             "total_error_rms_history": getattr(model, "total_error_rms_history", []),
+            "relative_error_rms_history": getattr(
+                model, "relative_error_rms_history", []
+            ),
             "boundary_error_history": model.boundary_error_history,
             "train_loss_history": model.train_loss_history,
             "total_residual_history": model.total_residual_history,
@@ -69,11 +75,17 @@ def save_model_checkpoint(model, filepath, additional_info=None):
             "fixed_total_residual_history": getattr(
                 model, "fixed_total_residual_history", []
             ),
+            "relative_fixed_l2_residual_history": getattr(
+                model, "relative_fixed_l2_residual_history", []
+            ),
             "fixed_boundary_residual_history": getattr(
                 model, "fixed_boundary_residual_history", []
             ),
             "fixed_rms_residual_history": getattr(
                 model, "fixed_rms_residual_history", []
+            ),
+            "relative_fixed_rms_residual_history": getattr(
+                model, "relative_fixed_rms_residual_history", []
             ),
             "mesh_point_history": model.mesh_point_history,
             "mesh_point_count_history": model.mesh_point_count_history,
@@ -124,7 +136,13 @@ def load_model_checkpoint(model, filepath):
                 checkpoint["mesh_y"], dtype=torch.float32, device=DEVICE
             )
         model.total_error_history = checkpoint.get("total_error_history", [])
+        model.relative_l2_error_history = checkpoint.get(
+            "relative_l2_error_history", []
+        )
         model.total_error_rms_history = checkpoint.get("total_error_rms_history", [])
+        model.relative_error_rms_history = checkpoint.get(
+            "relative_error_rms_history", []
+        )
         model.boundary_error_history = checkpoint.get("boundary_error_history", [])
         model.train_loss_history = checkpoint.get("train_loss_history", [])
         model.total_residual_history = checkpoint.get("total_residual_history", [])
@@ -134,11 +152,17 @@ def load_model_checkpoint(model, filepath):
         model.fixed_total_residual_history = checkpoint.get(
             "fixed_total_residual_history", []
         )
+        model.relative_fixed_l2_residual_history = checkpoint.get(
+            "relative_fixed_l2_residual_history", []
+        )
         model.fixed_boundary_residual_history = checkpoint.get(
             "fixed_boundary_residual_history", []
         )
         model.fixed_rms_residual_history = checkpoint.get(
             "fixed_rms_residual_history", []
+        )
+        model.relative_fixed_rms_residual_history = checkpoint.get(
+            "relative_fixed_rms_residual_history", []
         )
         model.mesh_point_history = checkpoint.get("mesh_point_history", [])
         model.mesh_point_count_history = checkpoint.get("mesh_point_count_history", [])
@@ -198,7 +222,13 @@ def print_model_summary(model):
 
     if model.total_error_history:
         final_error = model.total_error_history[-1]
-        print(f"Final total error: {final_error:.6e}")
+        print(f"Final error integral: {final_error:.6e}")
+    if getattr(model, "relative_l2_error_history", None):
+        print(f"Final relative L2 error: {model.relative_l2_error_history[-1]:.6e}")
+    if getattr(model, "relative_error_rms_history", None):
+        print(
+            f"Final relative RMS error: {model.relative_error_rms_history[-1]:.6e}"
+        )
 
     if model.train_loss_history:
         print(f"Training epochs completed: {len(model.train_loss_history)}")
@@ -293,6 +323,15 @@ def log_experiment_info(model, config_info=None, filepath=None):
             f.write(f"  Final mesh points: {model.mesh_point_count_history[-1]:,}\n")
 
         if model.total_error_history:
-            f.write(f"  Final total error: {model.total_error_history[-1]:.6e}\n")
+            f.write(f"  Final error integral: {model.total_error_history[-1]:.6e}\n")
+        if getattr(model, "relative_l2_error_history", None):
+            f.write(
+                f"  Final relative L2 error: {model.relative_l2_error_history[-1]:.6e}\n"
+            )
+        if getattr(model, "relative_error_rms_history", None):
+            f.write(
+                "  Final relative RMS error: "
+                f"{model.relative_error_rms_history[-1]:.6e}\n"
+            )
 
     print(f"Experiment log saved to {filepath}")

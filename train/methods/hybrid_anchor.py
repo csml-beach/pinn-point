@@ -66,6 +66,8 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
             batch_size=max(256, self.anchor_count * 4),
             max_batches=40,
             warn_label="hybrid anchor points",
+            method_name=self.name,
+            iteration=-1,
         )
 
         values = []
@@ -209,3 +211,10 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         )
 
         return mesh, was_refined
+
+    def log_iteration(self, iteration: int, mesh: Any, model: Any) -> dict:
+        base_log = super().log_iteration(iteration, mesh, model)
+        if getattr(model, "hybrid_refinement_stats_history", None):
+            base_log.update(model.hybrid_refinement_stats_history[-1])
+        base_log["sampling_strategy"] = "hybrid_anchor"
+        return base_log

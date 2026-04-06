@@ -67,6 +67,7 @@ class RADMethod(TrainingMethod):
         self._candidate_points = None
         self._cached_points = None
         self._last_resample_iteration = -1
+        self._last_iteration_stats: dict[str, int | float | bool | str] = {}
 
         # Reference to problem for computing residuals
         self._problem = None
@@ -79,7 +80,9 @@ class RADMethod(TrainingMethod):
         """
         self._problem = problem
 
-    def _generate_candidate_points(self, mesh: Any) -> np.ndarray:
+    def _generate_candidate_points(
+        self, mesh: Any, iteration: int | None = None
+    ) -> np.ndarray:
         """Generate dense candidate set using rejection sampling.
 
         Args:
@@ -102,11 +105,40 @@ class RADMethod(TrainingMethod):
             batch_size=max(512, self.num_candidates // 2),
             max_batches=40,
             warn_label="candidate points",
+            method_name=self.name,
+            iteration=iteration,
         )
+
+    def _uniform_probability_weights(
+        self,
+        count: int,
+        *,
+        fallback_reason: str,
+        residual_stats: dict[str, int | float | bool | str] | None = None,
+    ) -> tuple[np.ndarray, dict[str, int | float | bool | str]]:
+        """Build a uniform PDF with diagnostic metadata."""
+        if count <= 0:
+            raise ValueError("count must be positive")
+
+        weights = np.full(count, 1.0 / count, dtype=np.float64)
+        stats: dict[str, int | float | bool | str] = {
+            "pdf_status": "uniform_fallback",
+            "fallback_reason": fallback_reason,
+            "weights_finite": int(count),
+            "weights_nonfinite": 0,
+            "weights_zero": 0,
+            "weight_min": float(weights[0]),
+            "weight_max": float(weights[0]),
+            "weight_mean": float(weights[0]),
+            "weight_sum": 1.0,
+        }
+        if residual_stats:
+            stats.update(residual_stats)
+        return weights, stats
 
     def _compute_residual_weights(
         self, candidate_points: np.ndarray, model: Any
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, dict[str, int | float | bool | str]]:
         """Compute probability weights based on PDE residual.
 
         Args:
@@ -114,9 +146,13 @@ class RADMethod(TrainingMethod):
             model: Trained PINN model
 
         Returns:
-            Array of shape (N,) with normalized probability weights
+            Tuple of normalized probability weights and diagnostic metadata
         """
         from config import DEVICE
+
+        candidate_count = int(len(candidate_points))
+        if candidate_count == 0:
+            raise ValueError("candidate_points must be non-empty")
 
         # Convert to tensors
         x = torch.tensor(candidate_points[:, 0], dtype=torch.float32, device=DEVICE)
@@ -131,26 +167,106 @@ class RADMethod(TrainingMethod):
             # Fallback: use model's built-in residual (for backward compatibility)
             residual = model.PDE_residual(x, y)
 
-        # Take absolute value and detach
-        residual_abs = torch.abs(residual).detach().cpu().numpy()
+        residual_abs = torch.abs(residual).detach().cpu().numpy().astype(np.float64)
+        residual_abs = np.reshape(residual_abs, (-1,))
 
-        # Handle edge cases
-        residual_abs = np.clip(residual_abs, 1e-10, None)  # Avoid zero
+        residual_finite_mask = np.isfinite(residual_abs)
+        finite_residuals = residual_abs[residual_finite_mask]
+        residual_stats: dict[str, int | float | bool | str] = {
+            "candidate_count": candidate_count,
+            "residual_finite": int(np.count_nonzero(residual_finite_mask)),
+            "residual_nonfinite": int(np.count_nonzero(~residual_finite_mask)),
+            "residual_min": (
+                float(np.min(finite_residuals))
+                if finite_residuals.size
+                else float("nan")
+            ),
+            "residual_max": (
+                float(np.max(finite_residuals))
+                if finite_residuals.size
+                else float("nan")
+            ),
+            "residual_mean": (
+                float(np.mean(finite_residuals))
+                if finite_residuals.size
+                else float("nan")
+            ),
+        }
 
-        # Compute weights: p(x) ∝ ε^k / E[ε^k] + c
-        residual_k = np.power(residual_abs, self.k)
-        mean_residual_k = np.mean(residual_k)
+        if not finite_residuals.size:
+            return self._uniform_probability_weights(
+                candidate_count,
+                fallback_reason="no_finite_residuals",
+                residual_stats=residual_stats,
+            )
 
-        if mean_residual_k < 1e-10:
-            # Uniform weights if residual is near zero everywhere
-            weights = np.ones(len(residual_k))
+        safe_residuals = np.clip(finite_residuals, 1e-300, None)
+
+        if self.k == 0:
+            residual_component = np.ones_like(safe_residuals, dtype=np.float64)
         else:
-            weights = residual_k / mean_residual_k + self.c
+            log_component = self.k * np.log(safe_residuals)
+            max_log_component = np.max(log_component)
+            shifted_component = log_component - max_log_component
+            residual_component = np.exp(shifted_component)
 
-        # Normalize to sum to 1
-        weights = weights / np.sum(weights)
+        if not np.all(np.isfinite(residual_component)):
+            return self._uniform_probability_weights(
+                candidate_count,
+                fallback_reason="nonfinite_residual_component",
+                residual_stats=residual_stats,
+            )
 
-        return weights
+        mean_component = float(np.mean(residual_component))
+        if not np.isfinite(mean_component) or mean_component <= 0.0:
+            return self._uniform_probability_weights(
+                candidate_count,
+                fallback_reason="invalid_component_mean",
+                residual_stats=residual_stats,
+            )
+
+        weights = np.zeros(candidate_count, dtype=np.float64)
+        weights[residual_finite_mask] = residual_component / mean_component
+        if self.c:
+            weights += float(self.c)
+
+        invalid_weight_mask = ~np.isfinite(weights) | (weights < 0.0)
+        if np.any(invalid_weight_mask):
+            weights[invalid_weight_mask] = 0.0
+
+        weight_sum = float(np.sum(weights))
+        if not np.isfinite(weight_sum) or weight_sum <= 0.0:
+            return self._uniform_probability_weights(
+                candidate_count,
+                fallback_reason="invalid_weight_sum",
+                residual_stats=residual_stats,
+            )
+
+        weights /= weight_sum
+
+        finite_weight_mask = np.isfinite(weights)
+        finite_weights = weights[finite_weight_mask]
+        stats = {
+            **residual_stats,
+            "pdf_status": "ok",
+            "fallback_reason": "",
+            "weights_finite": int(np.count_nonzero(finite_weight_mask)),
+            "weights_nonfinite": int(np.count_nonzero(~finite_weight_mask)),
+            "weights_zero": int(np.count_nonzero(weights == 0.0)),
+            "weight_min": (
+                float(np.min(finite_weights)) if finite_weights.size else float("nan")
+            ),
+            "weight_max": (
+                float(np.max(finite_weights)) if finite_weights.size else float("nan")
+            ),
+            "weight_mean": (
+                float(np.mean(finite_weights)) if finite_weights.size else float("nan")
+            ),
+            "weight_sum": float(np.sum(finite_weights))
+            if finite_weights.size
+            else float("nan"),
+        }
+        return weights, stats
 
     def get_collocation_points(
         self,
@@ -185,7 +301,9 @@ class RADMethod(TrainingMethod):
                 self._candidate_points is None
                 or len(self._candidate_points) < self.num_candidates
             ):
-                self._candidate_points = self._generate_candidate_points(mesh)
+                self._candidate_points = self._generate_candidate_points(
+                    mesh, iteration=iteration
+                )
 
             if model is None:
                 # First iteration: uniform random sampling
@@ -194,9 +312,24 @@ class RADMethod(TrainingMethod):
                     size=min(num_points, len(self._candidate_points)),
                     replace=False,
                 )
+                self._last_iteration_stats = {
+                    "iteration": int(iteration),
+                    "sampling_strategy": "initial_uniform_from_candidates",
+                    "resampled": True,
+                    "num_candidates": int(len(self._candidate_points)),
+                    "sampled_points": int(len(indices)),
+                    "replace": False,
+                }
             else:
                 # Compute residual-based weights
-                weights = self._compute_residual_weights(self._candidate_points, model)
+                weights, pdf_stats = self._compute_residual_weights(
+                    self._candidate_points, model
+                )
+                if pdf_stats.get("pdf_status") != "ok":
+                    print(
+                        f"[RAD] Iteration {iteration}: falling back to uniform PDF "
+                        f"({pdf_stats.get('fallback_reason', 'unknown')})"
+                    )
 
                 # Sample according to weights (with replacement if needed)
                 replace = num_points > len(self._candidate_points)
@@ -206,9 +339,33 @@ class RADMethod(TrainingMethod):
                     replace=replace,
                     p=weights,
                 )
+                self._last_iteration_stats = {
+                    "iteration": int(iteration),
+                    "sampling_strategy": "residual_pdf",
+                    "resampled": True,
+                    "num_candidates": int(len(self._candidate_points)),
+                    "sampled_points": int(len(indices)),
+                    "replace": bool(replace),
+                    **pdf_stats,
+                }
 
             self._cached_points = self._candidate_points[indices]
             self._last_resample_iteration = iteration
+        else:
+            self._last_iteration_stats = {
+                "iteration": int(iteration),
+                "sampling_strategy": "cached_residual_pdf",
+                "resampled": False,
+                "num_candidates": (
+                    int(len(self._candidate_points))
+                    if self._candidate_points is not None
+                    else 0
+                ),
+                "sampled_points": int(len(self._cached_points))
+                if self._cached_points is not None
+                else 0,
+                "replace": False,
+            }
 
         points = self._cached_points
         return points_to_tensors(points)
@@ -239,3 +396,9 @@ class RADMethod(TrainingMethod):
             residual = model.PDE_residual(x, y)
 
         return torch.abs(residual).detach().cpu().numpy()
+
+    def log_iteration(self, iteration: int, mesh: Any, model: Any) -> dict:
+        base_log = super().log_iteration(iteration, mesh, model)
+        if self._last_iteration_stats:
+            base_log.update(self._last_iteration_stats)
+        return base_log

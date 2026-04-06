@@ -50,7 +50,9 @@ class QuasiRandomMethod(TrainingMethod):
         """Create the quasi-random sampler. Override in subclasses."""
         raise NotImplementedError
 
-    def _generate_quasi_random_points(self, num_points: int, mesh: Any) -> np.ndarray:
+    def _generate_quasi_random_points(
+        self, num_points: int, mesh: Any, iteration: int | None = None
+    ) -> np.ndarray:
         """Generate quasi-random points using bounding box + rejection sampling.
 
         Args:
@@ -87,6 +89,8 @@ class QuasiRandomMethod(TrainingMethod):
             batch_size=batch_size,
             max_batches=50,
             warn_label="quasi-random points",
+            method_name=self.name,
+            iteration=iteration,
         )
 
     def get_collocation_points(
@@ -117,7 +121,9 @@ class QuasiRandomMethod(TrainingMethod):
         if self._cached_points is not None and self._cached_num_points == num_points:
             points = self._cached_points
         else:
-            points = self._generate_quasi_random_points(num_points, mesh)
+            points = self._generate_quasi_random_points(
+                num_points, mesh, iteration=iteration
+            )
             self._cached_points = points
             self._cached_num_points = num_points
 

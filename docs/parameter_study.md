@@ -5,11 +5,14 @@ This document explains how to run parameter sweeps in this project to study how 
 ## What it does
 - Runs multiple experiments with different configuration values.
 - Creates an isolated per-run folder at `outputs/<run-id>/` with:
-  - `images/` plots (if enabled)
+  - `images/comparison/` plots (if enabled)
+  - `images/methods/<method>/` method-local images such as convergence plots
   - `reports/all_methods_histories.csv` for postprocessing
   - `reports/performance_summary.txt` for end-of-run comparison metrics
   - `reports/point_usage_table.txt` for per-iteration point budgets
   - `reports/run_config.json` with configs, system, git metadata, and seed
+  - `reports/run_manifest.json` describing the run layout
+  - `reports/methods/<method>/` per-method `history.csv`, `diagnostics.json`, `iteration_diagnostics.csv`, and `sampling_stats.txt`
 - You can aggregate multiple runs into a shaded mean±std error plot.
 
 ## Reproducibility
@@ -50,8 +53,8 @@ Example `my_grid.json`:
 {
   "MODEL_CONFIG.hidden_size": [32, 64],
   "TRAINING_CONFIG.lr": [0.001, 0.0003],
-  "TRAINING_CONFIG.epochs": [500],
-  "TRAINING_CONFIG.iterations": [5],
+  "TRAINING_CONFIG.epochs": [100],
+  "TRAINING_CONFIG.iterations": [4],
   "MESH_CONFIG.maxh": [0.5, 0.7],
   "MODEL_CONFIG.w_interior": [1.0, 2.0]
 }
