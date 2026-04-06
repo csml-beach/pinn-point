@@ -116,6 +116,11 @@ Edit `train/config.py`:
 - [Hybrid Adaptive Plan](docs/hybrid_adaptive_plan.md) — anchor-based hybrid refinement design
 - [Repo TODO](docs/todo.md) — active follow-ups and completed milestones
 
+Current default lean/screen supervision setting:
+- `MODEL_CONFIG["num_data"] = 128`
+- `MODEL_CONFIG["w_data"] = 0.25`
+- This keeps the coarse-mesh labeled data as a fixed anchor while giving residual-based collocation more influence.
+
 ## Outputs
 
 Each run creates `outputs/<timestamp>_<tag>/`:

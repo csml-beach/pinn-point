@@ -59,13 +59,14 @@ MODEL_CONFIG = {
     "hidden_size": 64,
     "num_data": 128,
     "num_bd": 1000,
-    "w_data": 0.5,
+    "w_data": 0.25,
 }
 ```
 
 Rationale:
 - `64` hidden units improved screening accuracy substantially without materially changing local iteration cost
 - the coarse labeled data still anchors training, but it no longer dominates the residual term as strongly
+- lowering `w_data` from `0.5` to `0.25` was the first screened change that let fixed-budget adaptive sampling become competitive on both solution error and normalized residual
 - the reduced label batch keeps the fixed-data paradigm intact while giving residual point placement more influence
 
 ### Geometry simplification
@@ -224,7 +225,7 @@ Use the following as the default fast-iteration benchmark:
 - hidden size: `64`
 - data points: `128`
 - boundary points: `1000`
-- data-loss weight: `0.5`
+- data-loss weight: `0.25`
 - geometry: `domain_size=5`, `grid_n=3`, `cell_fill=0.45`, `circle_radius=0.7`
 - methods: `adaptive`, `random`, `halton`
 - seeds: `1` for development, `3` for screening

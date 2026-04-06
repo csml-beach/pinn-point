@@ -64,7 +64,7 @@ MODEL_CONFIG = {
     "hidden_size": 64,
     "num_data": 128,  # Labeled coarse-mesh batch size per optimizer step
     "num_bd": 1000,  # Size of boundary condition enforcement (how many boundary points to check)
-    "w_data": 0.5,  # loss_data weight
+    "w_data": 0.25,  # loss_data weight
     "w_interior": 1.0,  # loss_interior weight
     "w_bc": 1.0,  # loss_bc weight
 }
