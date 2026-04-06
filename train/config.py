@@ -62,9 +62,9 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
 # Model hyperparameters
 MODEL_CONFIG = {
     "hidden_size": 64,
-    "num_data": 500,  # Size of data loss computation (how many FEM training points to use)
+    "num_data": 128,  # Labeled coarse-mesh batch size per optimizer step
     "num_bd": 1000,  # Size of boundary condition enforcement (how many boundary points to check)
-    "w_data": 1.0,  # loss_data weight
+    "w_data": 0.5,  # loss_data weight
     "w_interior": 1.0,  # loss_interior weight
     "w_bc": 1.0,  # loss_bc weight
 }
@@ -105,7 +105,9 @@ VIZ_CONFIG = {
     # Optional fixed color ranges for consistency across plots
     # Set to a tuple (vmin, vmax) to fix colorbar range; leave as None for auto-scaling
     "residual_clim": (0.0, 30.0),  # e.g., (0.0, 1e-2)
-    "error_clim": (0.0, 200.0),  # e.g., (0.0, 1e-3)
+    # Error images show pointwise squared error, not the normalized headline metric.
+    # The previous 200.0 cap was from a much rougher regime and flattened current plots.
+    "error_clim": (0.0, 5.0),
 }
 
 # Random point generation
@@ -121,11 +123,6 @@ RAD_CONFIG = {
     "c": 0.0,  # Regularization constant (higher = more uniform coverage)
     "num_candidates": 500,  # Size of candidate set for residual evaluation during lean iteration
     "resample_period": 2,  # Resample points every N iterations
-}
-
-# Random-R (Random with Resampling) parameters
-RANDOM_R_CONFIG = {
-    "resample_period": 1,  # Resample points every N iterations (1 = every iteration)
 }
 
 # Quasi-random sampling parameters

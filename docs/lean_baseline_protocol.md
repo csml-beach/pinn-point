@@ -52,19 +52,21 @@ Rationale:
 - the initial mesh is coarser than the current default
 - the reference mesh remains fixed and fair across methods, but is much cheaper than the production setting
 
-### Model-side batch sizes
+### Model-side batch sizes and supervision weight
 
 ```python
 MODEL_CONFIG = {
     "hidden_size": 64,
-    "num_data": 500,
+    "num_data": 128,
     "num_bd": 1000,
+    "w_data": 0.5,
 }
 ```
 
 Rationale:
 - `64` hidden units improved screening accuracy substantially without materially changing local iteration cost
-- the reduced loss batches still keep each step lightweight
+- the coarse labeled data still anchors training, but it no longer dominates the residual term as strongly
+- the reduced label batch keeps the fixed-data paradigm intact while giving residual point placement more influence
 
 ### Geometry simplification
 
@@ -97,7 +99,7 @@ Use:
 Why:
 - `random` is the minimal baseline
 - `halton` is a stronger non-adaptive baseline
-- `adaptive` is the main method of interest
+- `adaptive` is the main residual-guided method of interest under the fixed collocation budget
 
 ### Hybrid-method iteration
 
@@ -119,22 +121,18 @@ HYBRID_ADAPTIVE_CONFIG = {
 Use `256` if the method becomes too noisy at `128`.
 Use the lower `beta` and higher hybrid-specific threshold to keep point growth under control during iteration.
 
-### RAD iteration
+### Screening default
 
-Use RAD only when specifically working on RAD.
-
-Additional lean settings:
-
-```python
-RAD_CONFIG = {
-    "num_candidates": 500,
-    "resample_period": 2,
-}
-```
+For the stronger `screen` profile, use:
+- `adaptive`
+- `random`
+- `halton`
+- `rad`
 
 Reason:
-- RAD is currently one of the more expensive and fragile methods in the repo
-- it should not be part of the default inner-loop benchmark until its stability work is complete
+- `adaptive` is now a fixed-budget residual-guided sampler
+- `rad` is the closest residual-only continuous-space competitor
+- `adaptive_hybrid_anchor` remains available, but it is no longer part of the default mainline comparison because it introduces extra interior supervised anchor labels
 
 ## Seed Policy
 
@@ -181,7 +179,7 @@ python3 train/main.py dev
 
 ### Screening
 
-- methods: `adaptive`, `adaptive_hybrid_anchor`, `random`, `halton`
+- methods: `adaptive`, `random`, `halton`, `rad`
 - seeds: `3`
 - hidden size: `64`
 - optimizer: `Adam`
@@ -224,8 +222,9 @@ Use the following as the default fast-iteration benchmark:
 - mesh size: `0.7`
 - reference mesh factor: `0.05`
 - hidden size: `64`
-- data points: `500`
+- data points: `128`
 - boundary points: `1000`
+- data-loss weight: `0.5`
 - geometry: `domain_size=5`, `grid_n=3`, `cell_fill=0.45`, `circle_radius=0.7`
 - methods: `adaptive`, `random`, `halton`
 - seeds: `1` for development, `3` for screening

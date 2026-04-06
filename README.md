@@ -1,7 +1,7 @@
 # PINN Adaptive Mesh Experiments
 
 This project compares Physics-Informed Neural Networks (PINNs) trained with:
-- **Adaptive mesh refinement** — selects new interior points where residuals are high
+- **Adaptive residual-guided sampling** — uses a refined mesh as a scaffold, then samples a fixed interior budget where residuals are high
 - **Baseline and competitive methods** — including random, low-discrepancy, and adaptive distributions
 
 The code runs controlled experiments, saves per-run artifacts to `outputs/<run-id>/`, and supports ablation studies across multiple runs and seeds.
@@ -10,12 +10,11 @@ The current default config is a lean iteration profile intended for faster metho
 ## Available Methods
 
 You can benchmark and compare the following methods:
-- `adaptive` — Residual-based adaptive mesh refinement
+- `adaptive` — Residual-guided fixed-budget interior sampling on a refined mesh scaffold
 - `adaptive_hybrid_anchor` — Residual + fixed-anchor supervised-error mesh refinement
 - `random` — Uniform random point sampling (baseline)
 - `halton` — Halton low-discrepancy sequence sampling
 - `sobol` — Sobol low-discrepancy sequence sampling
-- `random_r` — Uniform random with periodic resampling (Random-R)
 - `rad` — Residual-based Adaptive Distribution (Wu et al. 2022)
 
 Select methods via CLI/config:
@@ -26,7 +25,7 @@ python3 train/main.py screen  # Stronger screening profile
 ```
 Method selection is currently controlled by CLI mode or by experiment scripts/specs:
 - `dev` defaults to `adaptive`, `random`, `halton`
-- `screen` defaults to `adaptive`, `adaptive_hybrid_anchor`, `random`, `halton`
+- `screen` defaults to `adaptive`, `random`, `halton`, `rad`
 - `main` currently runs `adaptive` and `random`
 
 ## Device Selection
@@ -101,7 +100,7 @@ Edit `train/config.py`:
 
 | Config | Key settings |
 |--------|--------------|
-| `MODEL_CONFIG` | `hidden_size`, `w_data`, `w_interior`, `w_bc` |
+| `MODEL_CONFIG` | `hidden_size`, `num_data`, `w_data`, `w_interior`, `w_bc` |
 | `TRAINING_CONFIG` | `epochs`, `iterations`, `optimizer`, `lr`, `seed` |
 | `MESH_CONFIG` | `maxh`, `refinement_threshold` |
 | `GEOMETRY_CONFIG` | `domain_size`, `grid_n`, `cell_fill`, `circle_radius` |

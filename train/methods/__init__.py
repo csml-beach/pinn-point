@@ -9,7 +9,6 @@ Available methods:
     - RandomMethod: Uniform random point sampling (baseline)
     - HaltonMethod: Halton low-discrepancy sequence sampling
     - SobolMethod: Sobol low-discrepancy sequence sampling
-    - RandomResamplingMethod: Uniform random with periodic resampling (Random-R)
     - RADMethod: Residual-based Adaptive Distribution (Wu et al. 2022)
     
 To add a new competitive method:
@@ -30,17 +29,17 @@ from .adaptive import AdaptiveMethod
 from .hybrid_anchor import AdaptiveHybridAnchorMethod
 from .random import RandomMethod
 from .quasi_random import HaltonMethod, SobolMethod
-from .random_r import RandomResamplingMethod
 from .rad import RADMethod
 
 # Registry of available methods for CLI/config selection
 METHOD_REGISTRY = {
     "adaptive": AdaptiveMethod,
+    "adaptive_mixed": AdaptiveMethod,
+    "adaptive_density": AdaptiveMethod,
     "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,
     "halton": HaltonMethod,
     "sobol": SobolMethod,
-    "random_r": RandomResamplingMethod,
     "rad": RADMethod,
 }
 

@@ -30,7 +30,11 @@ class TrainingMethod(ABC):
 
     @abstractmethod
     def get_collocation_points(
-        self, mesh: Any, model: Optional[Any] = None, iteration: int = 0
+        self,
+        mesh: Any,
+        model: Optional[Any] = None,
+        iteration: int = 0,
+        num_points: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Get collocation points for PDE residual evaluation.
 
@@ -38,6 +42,7 @@ class TrainingMethod(ABC):
             mesh: Current mesh object
             model: Optional trained model (for adaptive methods)
             iteration: Current iteration number
+            num_points: Desired collocation budget
 
         Returns:
             Tuple of (x, y) tensors containing point coordinates

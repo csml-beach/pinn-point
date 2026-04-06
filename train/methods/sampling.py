@@ -124,3 +124,32 @@ def points_to_tensors(points: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
         torch.tensor(points[:, 0], dtype=torch.float32),
         torch.tensor(points[:, 1], dtype=torch.float32),
     )
+
+
+def sample_uniform_points_in_triangle(
+    triangle: np.ndarray, count: int, rng: np.random.RandomState
+) -> np.ndarray:
+    """Sample points uniformly inside a triangle.
+
+    Args:
+        triangle: Array of shape (3, 2) with triangle vertices
+        count: Number of interior points to sample
+        rng: Random number generator
+
+    Returns:
+        Array of shape (count, 2)
+    """
+    triangle = np.asarray(triangle, dtype=float)
+    if triangle.shape != (3, 2):
+        raise ValueError("triangle must have shape (3, 2)")
+    if count <= 0:
+        return np.empty((0, 2), dtype=float)
+
+    uv = rng.uniform(size=(count, 2))
+    reflect_mask = np.sum(uv, axis=1) > 1.0
+    uv[reflect_mask] = 1.0 - uv[reflect_mask]
+
+    vertex_a = triangle[0]
+    edge_ab = triangle[1] - vertex_a
+    edge_ac = triangle[2] - vertex_a
+    return vertex_a + uv[:, :1] * edge_ab + uv[:, 1:] * edge_ac

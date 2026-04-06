@@ -155,7 +155,7 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         return clipped / (scale + 1e-12), scale
 
     def refine_mesh(self, mesh: Any, model: Any, iteration: int = 0):
-        _, _, eta2, total_residual, boundary_residual = self._compute_residual_indicators(
+        _, areas, residual_scores, total_residual = self._evaluate_residual_scores(
             mesh, model
         )
         if not hasattr(model, "total_residual_history"):
@@ -163,15 +163,14 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         if not hasattr(model, "boundary_residual_history"):
             model.boundary_residual_history = []
         model.total_residual_history.append(total_residual)
-        model.boundary_residual_history.append(boundary_residual)
+        model.boundary_residual_history.append(float("nan"))
 
         point_errors = self._compute_anchor_point_errors(model)
         element_anchor_errors, assigned_anchor_points = self._aggregate_anchor_errors_to_elements(
             mesh, point_errors
         )
 
-        residual_indicator = np.asarray(eta2.NumPy(), dtype=float)
-        residual_norm, residual_scale = self._robust_normalize(residual_indicator)
+        residual_norm, residual_scale = self._robust_normalize(residual_scores)
         anchor_norm, anchor_scale = self._robust_normalize(element_anchor_errors)
         score = self.alpha * residual_norm + self.beta * anchor_norm
 
@@ -186,6 +185,35 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
             mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             was_refined = False
 
+        refined_triangles, refined_areas, refined_residual_scores, _ = (
+            self._evaluate_residual_scores(mesh, model)
+        )
+        refined_anchor_errors, refined_assigned_anchor_points = (
+            self._aggregate_anchor_errors_to_elements(mesh, point_errors)
+        )
+        refined_residual_norm, refined_residual_scale = self._robust_normalize(
+            refined_residual_scores
+        )
+        refined_anchor_norm, refined_anchor_scale = self._robust_normalize(
+            refined_anchor_errors
+        )
+        refined_score = (
+            self.alpha * refined_residual_norm + self.beta * refined_anchor_norm
+        )
+        self._set_sampling_distribution(
+            refined_triangles, refined_areas, refined_areas * refined_score
+        )
+
+        self._last_refinement_stats = {
+            "iteration": int(iteration),
+            "total_residual": float(total_residual),
+            "boundary_residual": float("nan"),
+            "max_indicator": float(max_score),
+            "mean_indicator": float(np.mean(score)) if score.size else 0.0,
+            "refined_elements": int(np.count_nonzero(refine_mask)),
+            "was_refined": bool(was_refined),
+        }
+
         if not hasattr(model, "hybrid_refinement_stats_history"):
             model.hybrid_refinement_stats_history = []
         model.hybrid_refinement_stats_history.append(
@@ -193,20 +221,22 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
                 "iteration": int(iteration),
                 "anchor_count": int(self.anchor_count),
                 "assigned_anchor_points": int(assigned_anchor_points),
+                "assigned_anchor_points_refined": int(refined_assigned_anchor_points),
                 "alpha": float(self.alpha),
                 "beta": float(self.beta),
-                "residual_scale_q": float(residual_scale),
-                "anchor_error_scale_q": float(anchor_scale),
+                "residual_scale_q": float(refined_residual_scale),
+                "anchor_error_scale_q": float(refined_anchor_scale),
                 "score_max": float(max_score),
-                "score_mean": float(np.mean(score)) if score.size else 0.0,
+                "score_mean": float(np.mean(refined_score)) if refined_score.size else 0.0,
                 "refined_elements": int(np.count_nonzero(refine_mask)),
             }
         )
 
         print(
             "Hybrid refinement stats: "
-            f"assigned_anchors={assigned_anchor_points}, "
-            f"residual_q={residual_scale:.3e}, anchor_q={anchor_scale:.3e}, "
+            f"assigned_anchors={refined_assigned_anchor_points}, "
+            f"residual_q={refined_residual_scale:.3e}, "
+            f"anchor_q={refined_anchor_scale:.3e}, "
             f"refined_elements={int(np.count_nonzero(refine_mask))}"
         )
 

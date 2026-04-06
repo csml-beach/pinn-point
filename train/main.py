@@ -58,9 +58,9 @@ DEV_DEFAULT_REFERENCE_MESH_FACTOR = 0.05
 
 SCREEN_DEFAULT_METHODS = [
     "adaptive",
-    "adaptive_hybrid_anchor",
     "random",
     "halton",
+    "rad",
 ]
 SCREEN_DEFAULT_MESH_SIZE = 0.7
 SCREEN_DEFAULT_NUM_ADAPTATIONS = 6

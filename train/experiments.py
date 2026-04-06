@@ -18,13 +18,9 @@ from config import (
     GEOMETRY_CONFIG,
     HYBRID_ADAPTIVE_CONFIG,
     MESH_CONFIG,
-    MODEL_CONFIG,
     QUASI_RANDOM_CONFIG,
     RAD_CONFIG,
-    RANDOM_CONFIG,
-    RANDOM_R_CONFIG,
     TRAINING_CONFIG,
-    VIZ_CONFIG,
 )
 from fem_solver import create_dataset, export_fem_solution, solve_FEM
 from geometry import export_vertex_coordinates
@@ -110,16 +106,14 @@ def _record_method_iteration_log(model, method, iteration: int, mesh):
     model.method_iteration_logs.append(normalized)
 
 
-def _log_comparison_budget_policy(epochs: int, methods_to_run: list[str]):
-    point_budget_source = (
-        "mesh-refinement method iteration-start point counts"
-        if any(method in MESH_REFINEMENT_METHODS for method in methods_to_run)
-        else "fixed per-method collocation counts"
-    )
+def _log_comparison_budget_policy(epochs: int, collocation_budget: int):
     print("\nComparison budget policy:")
     print(f"  Exact optimizer budget per iteration: {epochs} epochs for every method")
     print("  Adaptive-only extra fine-tuning: disabled")
-    print(f"  Point-budget source: {point_budget_source}")
+    print(
+        "  Fixed interior collocation budget: "
+        f"{int(collocation_budget):,} points per iteration for every method"
+    )
     print(
         "  Runtime metric scope: point selection/refinement, training, and evaluation"
     )
@@ -132,6 +126,33 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         method = get_method(
             method_name,
             refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            area_exponent=0.5,
+        )
+        method.description = (
+            "Residual-guided interior sampling with mixed area/density scoring"
+        )
+    elif method_name == "adaptive_mixed":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            area_exponent=0.5,
+        )
+        method.name = method_name
+        method.description = (
+            "Residual-guided interior sampling with mixed area/density scoring"
+        )
+    elif method_name == "adaptive_density":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            area_exponent=0.0,
+        )
+        method.name = method_name
+        method.description = (
+            "Residual-guided interior sampling with residual-density scoring"
         )
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(
@@ -160,13 +181,6 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
             resample_period=RAD_CONFIG["resample_period"],
             seed=method_seed,
         )
-    elif method_name == "random_r":
-        method = get_method(
-            method_name,
-            domain_bounds=domain_bounds,
-            resample_period=RANDOM_R_CONFIG["resample_period"],
-            seed=method_seed,
-        )
     elif method_name in ("halton", "sobol"):
         method = get_method(
             method_name,
@@ -193,6 +207,7 @@ def run_mesh_refinement_method_training_fair(
     reference_solution,
     num_adaptations,
     epochs,
+    collocation_budget,
     export_images,
     initial_state_dict=None,
     method_seed=None,
@@ -226,14 +241,16 @@ def run_mesh_refinement_method_training_fair(
     if method_seed is not None:
         set_global_seed(method_seed)
 
-    # Get initial mesh coordinates
-    vertex_array = export_vertex_coordinates(initial_mesh)
-    mesh_x, mesh_y = vertex_array.T
+    current_mesh = initial_mesh
+    init_x, init_y = method.get_collocation_points(
+        current_mesh,
+        model=None,
+        iteration=0,
+        num_points=collocation_budget,
+    )
+    print(f"Initial collocation budget: {len(init_x):,} points")
 
-    print(f"Initial mesh: {len(mesh_x):,} points")
-
-    # Initialize model with shared training data coordinates
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    model = FeedForward(mesh_x=init_x, mesh_y=init_y, problem=problem).to(DEVICE)
     if initial_state_dict is not None:
         model.load_state_dict(copy.deepcopy(initial_state_dict))
     model.method_name = method_name
@@ -243,11 +260,9 @@ def run_mesh_refinement_method_training_fair(
     model.reference_solution = reference_solution
 
     # Initialize tracking
-    model.mesh_point_history = [vertex_array.clone()]
-    model.mesh_point_count_history = [len(mesh_x)]
-
-    # Create working mesh copy (will be refined during training)
-    current_mesh = initial_mesh  # This gets modified during adaptation
+    initial_points = torch.stack([init_x, init_y], dim=1).detach().cpu().clone()
+    model.mesh_point_history = [initial_points]
+    model.mesh_point_count_history = [len(init_x)]
 
     # Adaptation iterations
     for iteration in range(num_adaptations):
@@ -256,6 +271,18 @@ def run_mesh_refinement_method_training_fair(
         print(f"{'='*60}")
 
         print(f"\n--- {method_name} Iteration {iteration + 1} ---")
+        if iteration > 0:
+            x, y = method.get_collocation_points(
+                current_mesh,
+                model=model,
+                iteration=iteration,
+                num_points=collocation_budget,
+            )
+            model.set_mesh_points(x, y)
+            sampled_points = torch.stack([x, y], dim=1).detach().cpu().clone()
+            model.mesh_point_history.append(sampled_points)
+            model.mesh_point_count_history.append(len(x))
+
         model.iteration_point_count_history.append(len(model.mesh_x))
         iter_start = time.perf_counter()
 
@@ -276,16 +303,6 @@ def run_mesh_refinement_method_training_fair(
         )
 
         current_mesh, _ = method.refine_mesh(current_mesh, model, iteration=iteration)
-        next_x, next_y = method.get_collocation_points(
-            current_mesh,
-            model=model,
-            iteration=iteration + 1,
-        )
-        model.set_mesh_points(next_x, next_y)
-        next_points = torch.stack([next_x, next_y], dim=1).detach().cpu().clone()
-        model.mesh_point_history.append(next_points)
-        model.mesh_point_count_history.append(len(next_x))
-
         _record_iteration_runtime(model, time.perf_counter() - iter_start)
         _record_method_iteration_log(model, method, iteration, current_mesh)
         print(
@@ -338,16 +355,16 @@ def run_method_training_fair(
     reference_solution,
     num_adaptations: int,
     epochs: int,
+    collocation_budget: int,
     export_images: bool,
-    reference_point_counts: list = None,
     initial_state_dict=None,
     method_seed=None,
 ):
     """
     Run training with any registered sampling method using shared components for fair comparison.
 
-    This is the generalized training function that works with all methods from the
-    methods registry (halton, sobol, random_r, rad, adaptive, random).
+    This is the generalized training function that works with all registered
+    fixed-budget sampling methods (halton, sobol, rad, adaptive, random).
 
     Args:
         method_name: Name of method from methods registry
@@ -358,7 +375,7 @@ def run_method_training_fair(
         num_adaptations: Number of adaptation iterations
         epochs: Number of training epochs per iteration
         export_images: Whether to export visualization images
-        reference_point_counts: Optional list of point counts to match (from adaptive method)
+        collocation_budget: Fixed interior collocation budget used by all methods
 
     Returns:
         FeedForward: Trained PINN model
@@ -407,20 +424,12 @@ def run_method_training_fair(
         print(f"\n--- {method_name} Iteration {iteration + 1}/{num_adaptations} ---")
         iter_start = time.perf_counter()
 
-        # Determine target point count
-        if reference_point_counts and iteration < len(reference_point_counts):
-            target_point_count = reference_point_counts[iteration]
-            print(f"Matching reference point count: {target_point_count:,}")
-        else:
-            # Use initial count (no mesh growth for non-adaptive methods)
-            target_point_count = initial_point_count
-
         # Get collocation points using the method
         x, y = method.get_collocation_points(
             initial_mesh,
             model=model,
             iteration=iteration,
-            num_points=target_point_count,
+            num_points=collocation_budget,
         )
 
         # Update model's residual computation points
@@ -543,7 +552,6 @@ def run_complete_experiment(
     print(f"Problem: {problem.name}")
     print(f"Base seed: {seed}")
     print(f"Device: {DEVICE}")
-    _log_comparison_budget_policy(epochs, methods_to_run)
 
     # Create shared components for fair comparison
     print("\n" + "=" * 60)
@@ -559,6 +567,8 @@ def run_complete_experiment(
     shared_training_dataset = create_dataset(vertex_array, solution_array)
     mesh_x, mesh_y = vertex_array.T
     print(f"Shared training dataset: {len(mesh_x):,} points")
+    collocation_budget = len(mesh_x)
+    _log_comparison_budget_policy(epochs, collocation_budget)
     initial_model_state = _build_initial_model_state(problem, vertex_array, seed)
 
     # 2. Create high-fidelity reference solution (shared by both methods)
@@ -575,15 +585,6 @@ def run_complete_experiment(
     # Dictionary to store all trained models
     trained_models = {}
     execution_order = list(methods_to_run)
-    adaptive_budget_method = None
-    for candidate in ("adaptive", "adaptive_hybrid_anchor"):
-        if candidate in execution_order:
-            adaptive_budget_method = candidate
-            break
-    if adaptive_budget_method is not None:
-        execution_order = [adaptive_budget_method] + [
-            method for method in execution_order if method != adaptive_budget_method
-        ]
 
     # Run each requested method with shared components
     for method in execution_order:
@@ -605,6 +606,7 @@ def run_complete_experiment(
                 reference_solution=reference_solution,
                 num_adaptations=num_adaptations,
                 epochs=epochs,
+                collocation_budget=collocation_budget,
                 export_images=export_images,
                 initial_state_dict=initial_model_state,
                 method_seed=method_seed,
@@ -612,13 +614,6 @@ def run_complete_experiment(
             trained_models[method] = model
 
         elif method in list_methods():
-            # Use generalized method training for all registered methods
-            reference_counts = None
-            if adaptive_budget_method in trained_models:
-                reference_counts = trained_models[
-                    adaptive_budget_method
-                ].iteration_point_count_history
-
             print(f"Starting {method} training...")
             model = run_method_training_fair(
                 method_name=method,
@@ -629,8 +624,8 @@ def run_complete_experiment(
                 reference_solution=reference_solution,
                 num_adaptations=num_adaptations,
                 epochs=epochs,
+                collocation_budget=collocation_budget,
                 export_images=export_images,
-                reference_point_counts=reference_counts,
                 initial_state_dict=initial_model_state,
                 method_seed=method_seed,
             )
@@ -674,6 +669,7 @@ def run_complete_experiment(
                 "mesh_size": mesh_size,
                 "iterations": num_adaptations,
                 "epochs": epochs,
+                "collocation_budget": collocation_budget,
                 "export_images": export_images,
                 "generate_report": generate_report,
             },
