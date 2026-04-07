@@ -133,6 +133,23 @@ Each run creates `outputs/<timestamp>_<tag>/`:
 - `reports/run_manifest.json` — index of run directories and artifact locations
 - `reports/methods/<method>/` — method-local `history.csv`, `diagnostics.json`, `iteration_diagnostics.csv`, and `sampling_stats.txt`
 
+## DVC Snapshots
+
+The repo is configured to save experiment outputs with DVC rather than Git blobs.
+
+- default DVC remote: `localstore`
+- remote path: `../pinn-point-dvc-storage`
+- default snapshot targets: `artifacts/figures`, `artifacts/metrics`, `artifacts/animations`, and `outputs/`
+
+Typical workflow after a benchmark finishes:
+
+```bash
+scripts/snapshot_research.sh --dry-run
+scripts/snapshot_research.sh -m "snapshot: 10-seed jetstream benchmark"
+```
+
+This writes DVC metadata for the result directories, stages code/docs plus the `.dvc` files, and creates one Git commit. Avoid snapshotting `outputs/` while a remote batch is still syncing into it.
+
 ## Reproducibility
 
 - Set `TRAINING_CONFIG["seed"]` for deterministic runs

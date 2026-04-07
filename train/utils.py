@@ -36,10 +36,11 @@ def set_global_seed(seed: int) -> None:
         pass
     try:
         torch.manual_seed(seed)
-        if torch.cuda.is_available():
+        if DEVICE.type == "cuda" and torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        if DEVICE.type == "cuda":
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
     except Exception:
         pass
 
@@ -242,14 +243,15 @@ def get_system_info():
     Returns:
         dict: System information
     """
+    cuda_available = torch.cuda.is_available()
     info = {
         "requested_device": REQUESTED_DEVICE,
         "device": str(DEVICE),
         "torch_version": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
+        "cuda_available": cuda_available,
     }
 
-    if torch.cuda.is_available():
+    if DEVICE.type == "cuda" and cuda_available:
         info["cuda_device_count"] = torch.cuda.device_count()
         current_index = DEVICE.index if DEVICE.type == "cuda" else 0
         info["cuda_device_name"] = torch.cuda.get_device_name(current_index)

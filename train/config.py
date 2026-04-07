@@ -3,16 +3,107 @@ Configuration file for PINN adaptive mesh training.
 Contains all constants, hyperparameters, and configuration settings.
 """
 
+import json
 import os
-import torch
+import sys
 import warnings
+
+
+def _spec_from_argv():
+    args = sys.argv[1:]
+    try:
+        spec_index = args.index("--spec")
+    except ValueError:
+        return None
+
+    if spec_index + 1 >= len(args):
+        return None
+
+    spec_path = args[spec_index + 1]
+    try:
+        with open(spec_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _get_requested_device():
+    env_requested = os.environ.get("PINN_DEVICE")
+    if env_requested is not None and env_requested.strip():
+        return env_requested.strip()
+
+    spec_requested = None if _SPEC_ARGV is None else _SPEC_ARGV.get("device")
+    if spec_requested is not None:
+        spec_requested = str(spec_requested).strip()
+        if spec_requested:
+            os.environ["PINN_DEVICE"] = spec_requested
+            return spec_requested
+
+    return "auto"
+
+
+def _get_requested_num_threads():
+    env_threads = os.environ.get("PINN_NUM_THREADS")
+    if env_threads is not None and env_threads.strip():
+        try:
+            return max(1, int(env_threads))
+        except ValueError:
+            return None
+
+    if _SPEC_ARGV is None:
+        return None
+
+    spec_threads = _SPEC_ARGV.get("num_threads")
+    if spec_threads is None:
+        return None
+
+    try:
+        spec_threads = max(1, int(spec_threads))
+    except (TypeError, ValueError):
+        return None
+
+    os.environ["PINN_NUM_THREADS"] = str(spec_threads)
+    return spec_threads
+
+
+_SPEC_ARGV = _spec_from_argv()
+_EARLY_REQUESTED_DEVICE = _get_requested_device()
+_REQUESTED_NUM_THREADS = _get_requested_num_threads()
+
+if _REQUESTED_NUM_THREADS is not None:
+    thread_vars = (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    )
+    for var in thread_vars:
+        os.environ[var] = str(_REQUESTED_NUM_THREADS)
+
+# If the user requested CPU, hide CUDA before importing torch so the entire
+# process stays on CPU instead of partially initializing a GPU context.
+if _EARLY_REQUESTED_DEVICE.lower() == "cpu":
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+import torch
+
+if _REQUESTED_NUM_THREADS is not None:
+    try:
+        torch.set_num_threads(_REQUESTED_NUM_THREADS)
+    except Exception:
+        pass
+    try:
+        torch.set_num_interop_threads(max(1, min(4, _REQUESTED_NUM_THREADS)))
+    except Exception:
+        pass
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
 
 
 def _resolve_device_from_env():
-    requested = os.environ.get("PINN_DEVICE", "auto").strip() or "auto"
+    requested = _EARLY_REQUESTED_DEVICE.strip() or "auto"
     lowered = requested.lower()
 
     if lowered == "auto":
@@ -54,6 +145,7 @@ REQUESTED_DEVICE, DEVICE = _resolve_device_from_env()
 RUNTIME_CONFIG = {
     "requested_device": REQUESTED_DEVICE,
     "active_device": str(DEVICE),
+    "num_threads": _REQUESTED_NUM_THREADS,
 }
 
 # Project configuration

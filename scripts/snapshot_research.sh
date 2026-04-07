@@ -9,7 +9,7 @@ Usage:
 Options:
   -m, --message        Git commit message.
   -d, --artifact-dirs  Comma-separated dirs to DVC-track.
-                       Default: artifacts/figures,artifacts/metrics,artifacts/animations
+                       Default: artifacts/figures,artifacts/metrics,artifacts/animations,outputs
       --dvc-commit     Run `dvc commit` after git commit when a DVC pipeline is in use.
       --dry-run        Print planned actions only.
   -h, --help           Show this help.
@@ -36,7 +36,7 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 commit_msg=""
-artifact_dirs="${ARTIFACT_DIRS:-artifacts/figures,artifacts/metrics,artifacts/animations}"
+artifact_dirs="${ARTIFACT_DIRS:-artifacts/figures,artifacts/metrics,artifacts/animations,outputs}"
 run_dvc_commit=0
 dry_run=0
 
