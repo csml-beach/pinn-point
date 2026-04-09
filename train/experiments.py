@@ -46,7 +46,7 @@ MESH_REFINEMENT_METHODS = {"adaptive", "adaptive_hybrid_anchor"}
 
 def _build_problem(problem_name: str = "poisson", problem_kwargs: dict | None = None):
     kwargs = dict(problem_kwargs or {})
-    if problem_name == "poisson":
+    if problem_name in {"poisson", "advection_diffusion"}:
         kwargs.setdefault("domain_size", GEOMETRY_CONFIG["domain_size"])
     return get_problem(problem_name, **kwargs)
 

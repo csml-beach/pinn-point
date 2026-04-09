@@ -5,7 +5,8 @@ This module provides an extensible framework for defining different PDEs
 that can be solved using Physics-Informed Neural Networks.
 
 Available problems:
-    - PoissonProblem: Poisson equation with source term f(x,y) = x*y
+    - PoissonProblem: Poisson equation with localized source bumps
+    - AdvectionDiffusionProblem: steady advection-diffusion-reaction equation
     
 To add a new problem:
     1. Create a new file in this directory (e.g., heat.py)
@@ -14,7 +15,7 @@ To add a new problem:
     4. Register in this __init__.py
 
 Example:
-    from problems import PoissonProblem
+    from problems import PoissonProblem, AdvectionDiffusionProblem
     
     problem = PoissonProblem()
     residual = problem.pde_residual(model, x, y)
@@ -22,11 +23,13 @@ Example:
 """
 
 from .base import PDEProblem
+from .advection_diffusion import AdvectionDiffusionProblem
 from .poisson import PoissonProblem
 
 # Registry of available problems for CLI/config selection
 PROBLEM_REGISTRY = {
     "poisson": PoissonProblem,
+    "advection_diffusion": AdvectionDiffusionProblem,
 }
 
 
