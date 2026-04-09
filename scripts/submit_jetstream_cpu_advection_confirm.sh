@@ -65,6 +65,7 @@ if [[ ! -d "$remote_ops_dir" ]]; then
   exit 1
 fi
 
+export CONFIG_FILE="$config_file"
 # shellcheck disable=SC1090
 source "$remote_ops_dir/lib.sh"
 
