@@ -65,6 +65,9 @@ if [[ ! -d "$remote_ops_dir" ]]; then
   exit 1
 fi
 
+# shellcheck disable=SC1090
+source "$remote_ops_dir/lib.sh"
+
 spec_dir="/tmp/pinn_point_jetstream_advdiff_confirm_specs"
 mkdir -p "$spec_dir"
 
@@ -74,15 +77,11 @@ echo "[submit] bootstrapping remote repo"
 CONFIG_FILE="$config_file" "$remote_ops_dir/bootstrap_remote.sh"
 
 echo "[submit] pinning remote repo to commit $commit_sha"
-CONFIG_FILE="$config_file" bash -lc "
+remote_exec "
   set -euo pipefail
-  source '$remote_ops_dir/lib.sh'
-  remote_exec '
-    set -euo pipefail
-    cd '\''$REMOTE_REPO_PATH'\''
-    git fetch --all --prune
-    git checkout '\''$commit_sha'\''
-  '
+  cd '$REMOTE_REPO_PATH'
+  git fetch --all --prune
+  git checkout '$commit_sha'
 "
 
 submit_seed() {
