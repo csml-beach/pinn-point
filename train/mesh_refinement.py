@@ -3,6 +3,7 @@ Mesh refinement and error computation functions.
 Contains functions for adaptive mesh refinement based on PINN residuals and error analysis.
 """
 
+import os
 import torch
 import numpy as np
 
@@ -25,6 +26,46 @@ def _model_images_dir(model):
     except Exception:
         pass
     return None
+
+
+def _export_reference_solution_if_needed(reference_mesh, reference_solution):
+    try:
+        from paths import comparison_images_dir
+        from visualization import export_to_png
+
+        output_dir = comparison_images_dir()
+        output_path = os.path.join(output_dir, "reference_solution.png")
+        if os.path.exists(output_path):
+            return
+        export_to_png(
+            reference_mesh,
+            reference_solution,
+            fieldname="reference_solution",
+            filename="reference_solution.png",
+            output_dir=output_dir,
+        )
+    except Exception as exc:
+        print(f"Warning: failed to export reference solution visualization: {exc}")
+
+
+def _export_model_solution_on_reference(
+    model, reference_mesh, reference_solution, u_pinn_on_ref, iteration
+):
+    try:
+        from visualization import export_to_png
+
+        output_dir = _model_images_dir(model)
+        if output_dir is not None:
+            export_to_png(
+                reference_mesh,
+                u_pinn_on_ref,
+                fieldname="solution",
+                filename=f"solutions_{iteration}.png",
+                output_dir=output_dir,
+            )
+        _export_reference_solution_if_needed(reference_mesh, reference_solution)
+    except Exception as exc:
+        print(f"Warning: failed to export solution visualization: {exc}")
 
 
 def _append_history_value(model, history_name, value):
@@ -676,6 +717,10 @@ def compute_model_error(
     if export_images and iteration is not None:
         from visualization import export_to_png
 
+        _export_model_solution_on_reference(
+            model, reference_mesh, reference_solution, u_pinn_on_ref, iteration
+        )
+
         # Project error CoefficientFunction to GridFunction for visualization
         error_gf = GridFunction(reference_fes)
         error_gf.Set(error)  # Project the coefficient function to grid function
@@ -1080,6 +1125,10 @@ def compute_random_model_error(
     # Export visualization if requested
     if export_images and iteration is not None:
         from visualization import export_to_png
+
+        _export_model_solution_on_reference(
+            model, reference_mesh, reference_solution, u_pinn_on_ref, iteration
+        )
 
         # Project error CoefficientFunction to GridFunction for visualization
         error_gf = GridFunction(reference_fes)
