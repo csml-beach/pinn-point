@@ -33,22 +33,20 @@ class AdvectionDiffusionProblem(PDEProblem):
     )
 
     _SOURCE_BUMPS = (
-        (1.55, 1.10, 3.00, 0.18),
-        (2.55, 3.80, -2.60, 0.16),
-        (3.85, 2.05, 2.40, 0.18),
+        (2.15, 1.10, 3.20, 0.13),
+        (3.55, 1.22, -2.80, 0.12),
     )
     _INFLOW_BUMPS = (
-        (1.10, 1.20, 0.18),
-        (3.90, 0.95, 0.18),
+        (1.15, 1.40, 0.12),
     )
 
     def __init__(
         self,
         domain_size: float = 5.0,
-        diffusion: float = 0.02,
-        velocity_x: float = 1.8,
-        velocity_y: float = 0.10,
-        reaction: float = 0.05,
+        diffusion: float = 0.012,
+        velocity_x: float = 2.2,
+        velocity_y: float = 0.03,
+        reaction: float = 0.0,
     ):
         self.domain_size = float(domain_size)
         self.diffusion = float(diffusion)
