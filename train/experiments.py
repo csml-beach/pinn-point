@@ -12,6 +12,7 @@ import time
 
 import torch
 from ngsolve import H1, Mesh
+from torch.utils.data import TensorDataset
 
 from config import (
     DEVICE,
@@ -21,6 +22,7 @@ from config import (
     QUASI_RANDOM_CONFIG,
     RAD_CONFIG,
     TRAINING_CONFIG,
+    VALIDATION_CONFIG,
 )
 from fem_solver import create_dataset, export_fem_solution, solve_FEM
 from geometry import export_vertex_coordinates
@@ -37,7 +39,13 @@ from paths import (
 from pinn_model import FeedForward
 from problems import get_problem
 from training import train_model
-from utils import print_model_summary, set_global_seed
+from utils import (
+    build_model_checkpoint,
+    get_selected_history_value,
+    print_model_summary,
+    restore_model_state_from_checkpoint,
+    set_global_seed,
+)
 from visualization import create_multi_method_visualizations
 
 
@@ -67,6 +75,64 @@ def _build_initial_model_state(problem, vertex_array, base_seed: int):
     state = copy.deepcopy(prototype.state_dict())
     del prototype
     return state
+
+
+def _split_training_and_validation_dataset(dataset, seed: int):
+    if not VALIDATION_CONFIG.get("enabled", True):
+        return dataset, None
+
+    if not hasattr(dataset, "tensors") or len(dataset.tensors) != 2:
+        return dataset, None
+
+    xy, u = dataset.tensors
+    total_count = len(xy)
+    if total_count < 2:
+        return dataset, None
+
+    holdout_fraction = float(VALIDATION_CONFIG.get("data_holdout_fraction", 0.0))
+    if holdout_fraction <= 0.0:
+        return dataset, None
+
+    val_count = max(1, int(round(total_count * holdout_fraction)))
+    val_count = min(val_count, total_count - 1)
+
+    generator = torch.Generator()
+    generator.manual_seed(int(seed) + 2027)
+    permutation = torch.randperm(total_count, generator=generator)
+    val_idx = permutation[:val_count]
+    train_idx = permutation[val_count:]
+
+    train_dataset = TensorDataset(xy[train_idx], u[train_idx])
+    validation_dataset = TensorDataset(xy[val_idx], u[val_idx])
+    return train_dataset, validation_dataset
+
+
+def _build_fixed_residual_validation_points(problem, mesh, collocation_budget, seed: int):
+    if not VALIDATION_CONFIG.get("enabled", True):
+        return None
+
+    point_count = VALIDATION_CONFIG.get("interior_point_count")
+    if point_count is None:
+        point_count = collocation_budget
+    point_count = max(1, int(point_count))
+
+    method = _build_method_instance("halton", problem, method_seed=int(seed) + 4099)
+    return method.get_collocation_points(
+        mesh,
+        model=None,
+        iteration=0,
+        num_points=point_count,
+    )
+
+
+def _append_validation_history(model, validation_result):
+    if validation_result is None:
+        return
+    model.validation_score_history.append(validation_result["validation_score"])
+    model.validation_data_loss_history.append(validation_result["validation_data_loss"])
+    model.validation_residual_loss_history.append(
+        validation_result["validation_residual_loss"]
+    )
 
 
 def _record_iteration_runtime(model, runtime_sec: float):
@@ -203,6 +269,8 @@ def run_mesh_refinement_method_training_fair(
     initial_mesh,
     initial_fem_solution,
     shared_dataset,
+    validation_dataset,
+    validation_residual_points,
     reference_mesh,
     reference_solution,
     num_adaptations,
@@ -265,6 +333,8 @@ def run_mesh_refinement_method_training_fair(
     model.mesh_point_count_history = [len(init_x)]
 
     # Adaptation iterations
+    best_iteration_checkpoint = None
+    best_iteration_score = None
     for iteration in range(num_adaptations):
         print(f"\n{'='*60}")
         print(f"ITERATION {iteration + 1}/{num_adaptations}")
@@ -286,12 +356,14 @@ def run_mesh_refinement_method_training_fair(
         model.iteration_point_count_history.append(len(model.mesh_x))
         iter_start = time.perf_counter()
 
-        train_model(
+        validation_result = train_model(
             model,
             shared_dataset,
             epochs,
             optimizer=TRAINING_CONFIG["optimizer"],
             lr=TRAINING_CONFIG["lr"],
+            validation_dataset=validation_dataset,
+            validation_residual_points=validation_residual_points,
         )
 
         compute_model_error(
@@ -301,12 +373,37 @@ def run_mesh_refinement_method_training_fair(
             export_images=export_images,
             iteration=iteration,
         )
+        _append_validation_history(model, validation_result)
 
         current_mesh, _ = method.refine_mesh(current_mesh, model, iteration=iteration)
         _record_iteration_runtime(model, time.perf_counter() - iter_start)
         _record_method_iteration_log(model, method, iteration, current_mesh)
+        if validation_result is not None:
+            validation_score = validation_result["validation_score"]
+            if (
+                best_iteration_score is None
+                or validation_score < best_iteration_score
+            ):
+                best_iteration_score = validation_score
+                model.selected_iteration_index = iteration
+                model.best_validation_score = validation_score
+                best_iteration_checkpoint = build_model_checkpoint(
+                    model,
+                    additional_info={
+                        "selected_iteration_index": iteration,
+                        "best_validation_score": validation_score,
+                    },
+                )
         print(
             f"Iteration {iteration + 1} completed. Current mesh: {len(model.mesh_x):,} points"
+        )
+
+    if best_iteration_checkpoint is not None:
+        restore_model_state_from_checkpoint(model, best_iteration_checkpoint)
+        print(
+            "Restored best validation iteration checkpoint: "
+            f"iteration={model.selected_iteration_index + 1}, "
+            f"score={model.best_validation_score:.6e}"
         )
 
     print(f"\n{'='*60}")
@@ -321,10 +418,13 @@ def run_adaptive_training_fair(
     initial_mesh,
     initial_fem_solution,
     shared_dataset,
+    validation_dataset,
+    validation_residual_points,
     reference_mesh,
     reference_solution,
     num_adaptations,
     epochs,
+    collocation_budget,
     export_images,
     initial_state_dict=None,
     method_seed=None,
@@ -336,10 +436,13 @@ def run_adaptive_training_fair(
         initial_mesh=initial_mesh,
         initial_fem_solution=initial_fem_solution,
         shared_dataset=shared_dataset,
+        validation_dataset=validation_dataset,
+        validation_residual_points=validation_residual_points,
         reference_mesh=reference_mesh,
         reference_solution=reference_solution,
         num_adaptations=num_adaptations,
         epochs=epochs,
+        collocation_budget=collocation_budget,
         export_images=export_images,
         initial_state_dict=initial_state_dict,
         method_seed=method_seed,
@@ -351,6 +454,8 @@ def run_method_training_fair(
     problem,
     initial_mesh,
     shared_dataset,
+    validation_dataset,
+    validation_residual_points,
     reference_mesh,
     reference_solution,
     num_adaptations: int,
@@ -420,6 +525,8 @@ def run_method_training_fair(
         random_fe_space = H1(initial_mesh, order=1, dirichlet=".*")
 
     # Training iterations
+    best_iteration_checkpoint = None
+    best_iteration_score = None
     for iteration in range(num_adaptations):
         print(f"\n--- {method_name} Iteration {iteration + 1}/{num_adaptations} ---")
         iter_start = time.perf_counter()
@@ -440,12 +547,14 @@ def run_method_training_fair(
         model.iteration_point_count_history.append(actual_count)
 
         # Train model
-        train_model(
+        validation_result = train_model(
             model,
             shared_dataset,
             epochs,
             optimizer=TRAINING_CONFIG["optimizer"],
             lr=TRAINING_CONFIG["lr"],
+            validation_dataset=validation_dataset,
+            validation_residual_points=validation_residual_points,
         )
 
         # Compute and record error
@@ -482,11 +591,36 @@ def run_method_training_fair(
                 iteration=iteration,
             )
 
+        _append_validation_history(model, validation_result)
         _record_iteration_runtime(model, time.perf_counter() - iter_start)
         _record_method_iteration_log(model, method, iteration, initial_mesh)
 
         # Record point count
         model.mesh_point_count_history.append(actual_count)
+        if validation_result is not None:
+            validation_score = validation_result["validation_score"]
+            if (
+                best_iteration_score is None
+                or validation_score < best_iteration_score
+            ):
+                best_iteration_score = validation_score
+                model.selected_iteration_index = iteration
+                model.best_validation_score = validation_score
+                best_iteration_checkpoint = build_model_checkpoint(
+                    model,
+                    additional_info={
+                        "selected_iteration_index": iteration,
+                        "best_validation_score": validation_score,
+                    },
+                )
+
+    if best_iteration_checkpoint is not None:
+        restore_model_state_from_checkpoint(model, best_iteration_checkpoint)
+        print(
+            "Restored best validation iteration checkpoint: "
+            f"iteration={model.selected_iteration_index + 1}, "
+            f"score={model.best_validation_score:.6e}"
+        )
 
     print(f"\n{method_name} training completed")
     return model
@@ -565,10 +699,24 @@ def run_complete_experiment(
     vertex_array = export_vertex_coordinates(initial_mesh)
     solution_array = export_fem_solution(initial_mesh, gfu, problem=problem)
     shared_training_dataset = create_dataset(vertex_array, solution_array)
+    training_dataset, validation_dataset = _split_training_and_validation_dataset(
+        shared_training_dataset, seed
+    )
     mesh_x, mesh_y = vertex_array.T
     print(f"Shared training dataset: {len(mesh_x):,} points")
     collocation_budget = len(mesh_x)
     _log_comparison_budget_policy(epochs, collocation_budget)
+    validation_residual_points = _build_fixed_residual_validation_points(
+        problem, initial_mesh, collocation_budget, seed
+    )
+    if validation_dataset is not None:
+        print(
+            "Validation policy: "
+            f"{len(training_dataset)} coarse training labels + "
+            f"{len(validation_dataset)} held-out validation labels, "
+            f"{len(validation_residual_points[0]) if validation_residual_points else 0} "
+            "fixed interior residual-validation points"
+        )
     initial_model_state = _build_initial_model_state(problem, vertex_array, seed)
 
     # 2. Create high-fidelity reference solution (shared by both methods)
@@ -601,7 +749,9 @@ def run_complete_experiment(
                 problem=problem,
                 initial_mesh=method_mesh,
                 initial_fem_solution=gfu,
-                shared_dataset=shared_training_dataset,
+                shared_dataset=training_dataset,
+                validation_dataset=validation_dataset,
+                validation_residual_points=validation_residual_points,
                 reference_mesh=reference_mesh,
                 reference_solution=reference_solution,
                 num_adaptations=num_adaptations,
@@ -619,7 +769,9 @@ def run_complete_experiment(
                 method_name=method,
                 problem=problem,
                 initial_mesh=method_mesh,
-                shared_dataset=shared_training_dataset,
+                shared_dataset=training_dataset,
+                validation_dataset=validation_dataset,
+                validation_residual_points=validation_residual_points,
                 reference_mesh=reference_mesh,
                 reference_solution=reference_solution,
                 num_adaptations=num_adaptations,
@@ -649,7 +801,7 @@ def run_complete_experiment(
             print("\nGenerating multi-method visualizations...")
             create_multi_method_visualizations(
                 trained_models,
-                dataset_size=len(shared_training_dataset),
+                dataset_size=len(training_dataset),
                 output_dir=comparison_images_dir(),
                 include_gifs=create_gifs and export_images,
                 cleanup_pngs=True,
@@ -670,6 +822,15 @@ def run_complete_experiment(
                 "iterations": num_adaptations,
                 "epochs": epochs,
                 "collocation_budget": collocation_budget,
+                "training_dataset_size": len(training_dataset),
+                "validation_dataset_size": (
+                    len(validation_dataset) if validation_dataset is not None else 0
+                ),
+                "validation_residual_point_count": (
+                    len(validation_residual_points[0])
+                    if validation_residual_points is not None
+                    else 0
+                ),
                 "export_images": export_images,
                 "generate_report": generate_report,
             },
@@ -716,6 +877,10 @@ def _history_csv_fieldnames():
         "fixed_boundary_residual",
         "fixed_rms_residual",
         "relative_fixed_rms_residual",
+        "validation_score",
+        "validation_data_loss",
+        "validation_residual_loss",
+        "is_selected_checkpoint",
         "point_count",
         "iteration_runtime_sec",
         "cumulative_runtime_sec",
@@ -737,10 +902,16 @@ def _collect_method_history_rows(method_name: str, model) -> list[dict]:
     relative_fixed_rms_residuals = getattr(
         model, "relative_fixed_rms_residual_history", []
     )
+    validation_scores = getattr(model, "validation_score_history", [])
+    validation_data_losses = getattr(model, "validation_data_loss_history", [])
+    validation_residual_losses = getattr(
+        model, "validation_residual_loss_history", []
+    )
     iteration_point_counts = getattr(model, "iteration_point_count_history", [])
     point_counts = getattr(model, "mesh_point_count_history", [])
     iteration_runtime = getattr(model, "iteration_runtime_history", [])
     cumulative_runtime = getattr(model, "cumulative_runtime_history", [])
+    selected_iteration_index = getattr(model, "selected_iteration_index", None)
 
     num_rows = max(
         len(total_errors),
@@ -753,6 +924,9 @@ def _collect_method_history_rows(method_name: str, model) -> list[dict]:
         len(fixed_boundary_residuals),
         len(fixed_rms_residuals),
         len(relative_fixed_rms_residuals),
+        len(validation_scores),
+        len(validation_data_losses),
+        len(validation_residual_losses),
         len(iteration_point_counts),
         len(iteration_runtime),
         len(cumulative_runtime),
@@ -805,6 +979,22 @@ def _collect_method_history_rows(method_name: str, model) -> list[dict]:
                     if i < len(relative_fixed_rms_residuals)
                     else None
                 ),
+                "validation_score": (
+                    validation_scores[i] if i < len(validation_scores) else None
+                ),
+                "validation_data_loss": (
+                    validation_data_losses[i]
+                    if i < len(validation_data_losses)
+                    else None
+                ),
+                "validation_residual_loss": (
+                    validation_residual_losses[i]
+                    if i < len(validation_residual_losses)
+                    else None
+                ),
+                "is_selected_checkpoint": (
+                    selected_iteration_index is not None and i == selected_iteration_index
+                ),
                 "point_count": point_count,
                 "iteration_runtime_sec": (
                     iteration_runtime[i] if i < len(iteration_runtime) else None
@@ -826,29 +1016,39 @@ def _write_history_csv(rows: list[dict], output_path: str):
 
 
 def _method_diagnostics_payload(method_name: str, model) -> dict:
-    def _final(history_name: str):
-        values = getattr(model, history_name, None) or []
-        return _json_safe(values[-1]) if values else None
+    def _selected(history_name: str):
+        return _json_safe(get_selected_history_value(model, history_name))
 
     return {
         "method": method_name,
+        "selected_iteration_index": getattr(model, "selected_iteration_index", None),
+        "best_validation_score": _json_safe(
+            getattr(model, "best_validation_score", None)
+        ),
         "final_metrics": {
-            "total_error": _final("total_error_history"),
-            "relative_l2_error": _final("relative_l2_error_history"),
-            "total_error_rms": _final("total_error_rms_history"),
-            "relative_error_rms": _final("relative_error_rms_history"),
-            "boundary_error": _final("boundary_error_history"),
-            "fixed_total_residual": _final("fixed_total_residual_history"),
-            "relative_fixed_l2_residual": _final(
+            "total_error": _selected("total_error_history"),
+            "relative_l2_error": _selected("relative_l2_error_history"),
+            "total_error_rms": _selected("total_error_rms_history"),
+            "relative_error_rms": _selected("relative_error_rms_history"),
+            "boundary_error": _selected("boundary_error_history"),
+            "fixed_total_residual": _selected("fixed_total_residual_history"),
+            "relative_fixed_l2_residual": _selected(
                 "relative_fixed_l2_residual_history"
             ),
-            "fixed_boundary_residual": _final("fixed_boundary_residual_history"),
-            "fixed_rms_residual": _final("fixed_rms_residual_history"),
-            "relative_fixed_rms_residual": _final(
+            "fixed_boundary_residual": _selected("fixed_boundary_residual_history"),
+            "fixed_rms_residual": _selected("fixed_rms_residual_history"),
+            "relative_fixed_rms_residual": _selected(
                 "relative_fixed_rms_residual_history"
             ),
-            "point_count": _final("mesh_point_count_history"),
-            "cumulative_runtime_sec": _final("cumulative_runtime_history"),
+            "validation_score": _selected("validation_score_history"),
+            "validation_data_loss": _selected("validation_data_loss_history"),
+            "validation_residual_loss": _selected(
+                "validation_residual_loss_history"
+            ),
+            "point_count": _json_safe(
+                len(model.mesh_x) if hasattr(model, "mesh_x") else None
+            ),
+            "cumulative_runtime_sec": _selected("cumulative_runtime_history"),
         },
         "history_lengths": {
             "total_error": len(getattr(model, "total_error_history", []) or []),

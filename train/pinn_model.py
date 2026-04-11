@@ -38,6 +38,9 @@ class FeedForward(nn.Module):
         self.fixed_boundary_residual_history = []
         self.fixed_rms_residual_history = []
         self.relative_fixed_rms_residual_history = []
+        self.validation_score_history = []
+        self.validation_data_loss_history = []
+        self.validation_residual_loss_history = []
         self.mesh_point_history = []
         self.mesh_point_count_history = []
         self.iteration_point_count_history = []
@@ -190,6 +193,13 @@ class FeedForward(nn.Module):
         loss_data = torch.mean(torch.square(u - u_pred))
         return loss_data
 
+    def loss_data_on_dataset(self, dataset):
+        """Compute supervised loss on the full provided dataset without resampling."""
+        xy, u = self._get_cached_dataset_tensors(dataset)
+        x, y = xy.unbind(dim=1)
+        u_pred = self.forward(x, y)
+        return torch.mean(torch.square(u - u_pred))
+
     def loss_interior(self):
         """Compute interior loss based on PDE residual.
 
@@ -199,6 +209,13 @@ class FeedForward(nn.Module):
         res = self.PDE_residual(self.mesh_x, self.mesh_y)
         loss_residual = torch.mean(torch.square(res))
         return loss_residual
+
+    def loss_interior_on_points(self, x_points, y_points):
+        """Compute residual loss on an explicit validation point set."""
+        x_points = torch.as_tensor(x_points, dtype=torch.float32, device=DEVICE)
+        y_points = torch.as_tensor(y_points, dtype=torch.float32, device=DEVICE)
+        res = self.PDE_residual(x_points, y_points)
+        return torch.mean(torch.square(res))
 
     def loss_boundary_condition(self):
         """Compute boundary condition loss (Dirichlet BC: u = 0 on bottom boundary).

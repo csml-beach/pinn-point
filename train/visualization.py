@@ -18,6 +18,7 @@ from paths import (
     method_images_dir,
     reports_dir,
 )
+from utils import get_selected_history_value
 
 
 # Configure matplotlib backend before using pyplot
@@ -443,56 +444,67 @@ def create_multi_method_performance_summary(trained_models: dict, save_path: str
         point_counts = _history_as_array(model, "mesh_point_count_history")
         if point_counts.size:
             initial = int(point_counts[0])
-            final = int(point_counts[-1])
+            final = int(len(model.mesh_x)) if hasattr(model, "mesh_x") else int(point_counts[-1])
             growth = final / initial if initial else float("nan")
             lines.append(f"  Points: {initial:,} -> {final:,} (x{growth:.2f})")
 
-        total_error = _history_as_array(model, "total_error_history")
-        relative_l2 = _history_as_array(model, "relative_l2_error_history")
-        if relative_l2.size:
-            lines.append(f"  Final relative L2 error: {relative_l2[-1]:.6e}")
-            ranking.append((relative_l2[-1], method_name))
+        selected_iteration = getattr(model, "selected_iteration_index", None)
+        if selected_iteration is not None:
+            lines.append(f"  Selected validation iteration: {int(selected_iteration) + 1}")
+        best_validation_score = getattr(model, "best_validation_score", None)
+        if best_validation_score is not None:
+            lines.append(f"  Best validation score: {float(best_validation_score):.6e}")
+
+        total_error = get_selected_history_value(model, "total_error_history")
+        relative_l2 = get_selected_history_value(model, "relative_l2_error_history")
+        if relative_l2 is not None:
+            lines.append(f"  Final relative L2 error: {relative_l2:.6e}")
+            ranking.append((relative_l2, method_name))
             ranking_metric = "relative L2 error"
-        elif total_error.size:
-            ranking.append((total_error[-1], method_name))
-        if total_error.size:
-            lines.append(f"  Final error integral: {total_error[-1]:.6e}")
+        elif total_error is not None:
+            ranking.append((total_error, method_name))
+        if total_error is not None:
+            lines.append(f"  Final error integral: {total_error:.6e}")
 
-        total_error_rms = _history_as_array(model, "total_error_rms_history")
-        relative_error_rms = _history_as_array(model, "relative_error_rms_history")
-        if total_error_rms.size:
-            lines.append(f"  Final RMS error: {total_error_rms[-1]:.6e}")
-        if relative_error_rms.size:
-            lines.append(f"  Final relative RMS error: {relative_error_rms[-1]:.6e}")
+        total_error_rms = get_selected_history_value(model, "total_error_rms_history")
+        relative_error_rms = get_selected_history_value(
+            model, "relative_error_rms_history"
+        )
+        if total_error_rms is not None:
+            lines.append(f"  Final RMS error: {total_error_rms:.6e}")
+        if relative_error_rms is not None:
+            lines.append(f"  Final relative RMS error: {relative_error_rms:.6e}")
 
-        fixed_residual = _history_as_array(model, "fixed_total_residual_history")
-        relative_fixed_l2_residual = _history_as_array(
+        fixed_residual = get_selected_history_value(model, "fixed_total_residual_history")
+        relative_fixed_l2_residual = get_selected_history_value(
             model, "relative_fixed_l2_residual_history"
         )
-        fixed_rms_residual = _history_as_array(model, "fixed_rms_residual_history")
-        relative_fixed_rms_residual = _history_as_array(
+        fixed_rms_residual = get_selected_history_value(
+            model, "fixed_rms_residual_history"
+        )
+        relative_fixed_rms_residual = get_selected_history_value(
             model, "relative_fixed_rms_residual_history"
         )
-        if fixed_residual.size:
-            lines.append(f"  Final fixed residual integral: {fixed_residual[-1]:.6e}")
-        if relative_fixed_l2_residual.size:
+        if fixed_residual is not None:
+            lines.append(f"  Final fixed residual integral: {fixed_residual:.6e}")
+        if relative_fixed_l2_residual is not None:
             lines.append(
                 "  Final relative fixed L2 residual: "
-                f"{relative_fixed_l2_residual[-1]:.6e}"
+                f"{relative_fixed_l2_residual:.6e}"
             )
-        if fixed_rms_residual.size:
+        if fixed_rms_residual is not None:
             lines.append(
-                f"  Final fixed reference-mesh RMS residual: {fixed_rms_residual[-1]:.6e}"
+                f"  Final fixed reference-mesh RMS residual: {fixed_rms_residual:.6e}"
             )
-        if relative_fixed_rms_residual.size:
+        if relative_fixed_rms_residual is not None:
             lines.append(
                 "  Final relative fixed RMS residual: "
-                f"{relative_fixed_rms_residual[-1]:.6e}"
+                f"{relative_fixed_rms_residual:.6e}"
             )
 
-        runtime = _history_as_array(model, "cumulative_runtime_history")
-        if runtime.size:
-            lines.append(f"  Cumulative runtime: {runtime[-1]:.2f}s")
+        runtime = get_selected_history_value(model, "cumulative_runtime_history")
+        if runtime is not None:
+            lines.append(f"  Cumulative runtime: {runtime:.2f}s")
 
         lines.append("")
 
@@ -558,7 +570,7 @@ def create_multi_method_point_usage_table(
         [
             "",
             "Notes:",
-            "- LabeledDatasetSize is the shared FEM supervision set size.",
+            "- LabeledDatasetSize is the supervised coarse-label training set size after holdout.",
             "- LabeledBatchSize is the shared supervised batch size used in loss_data.",
             "- Method columns report PDE residual collocation counts per iteration.",
         ]

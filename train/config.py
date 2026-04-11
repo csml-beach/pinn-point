@@ -170,6 +170,14 @@ TRAINING_CONFIG = {
     "seed": None,
 }
 
+# Validation/checkpoint-selection parameters
+VALIDATION_CONFIG = {
+    "enabled": True,
+    "data_holdout_fraction": 0.2,  # Hold out part of the coarse FEM labels for checkpoint selection
+    "interior_point_count": None,  # If None, match the interior collocation budget
+    "check_interval": 50,  # Evaluate validation score every N epochs
+}
+
 # Mesh parameters
 MESH_CONFIG = {
     "maxh": 0.7,  # Initial mesh size

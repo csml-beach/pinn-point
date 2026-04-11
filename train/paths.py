@@ -21,6 +21,7 @@ from config import (
     PROJECT_ROOT,
     MODEL_CONFIG,
     TRAINING_CONFIG,
+    VALIDATION_CONFIG,
     MESH_CONFIG,
     HYBRID_ADAPTIVE_CONFIG,
     RANDOM_CONFIG,
@@ -163,6 +164,7 @@ def write_run_metadata(
         "configs": {
             "model": MODEL_CONFIG,
             "training": TRAINING_CONFIG,
+            "validation": VALIDATION_CONFIG,
             "mesh": MESH_CONFIG,
             "hybrid_adaptive": HYBRID_ADAPTIVE_CONFIG,
             "random": RANDOM_CONFIG,
