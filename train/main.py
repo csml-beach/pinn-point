@@ -104,6 +104,7 @@ def _parse_dev_args(args):
         "problem_name": "poisson",
         "problem_kwargs": None,
         "validation_options": None,
+        "learning_rate": None,
         "export_images": False,
         "create_gifs": False,
         "generate_report": True,
@@ -151,6 +152,13 @@ def _parse_dev_args(args):
                 print(
                     f"Warning: invalid epochs value '{args[i + 1]}', using default dev value"
                 )
+            i += 2
+            continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
             i += 2
             continue
         if arg == "--reference-mesh-factor" and i + 1 < len(args):
@@ -210,6 +218,7 @@ def _parse_screen_args(args):
         "problem_name": "poisson",
         "problem_kwargs": None,
         "validation_options": None,
+        "learning_rate": None,
         "export_images": False,
         "create_gifs": False,
         "generate_report": True,
@@ -260,6 +269,13 @@ def _parse_screen_args(args):
                     "Warning: invalid epochs value "
                     f"'{args[i + 1]}', using default screen value"
                 )
+            i += 2
+            continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
             i += 2
             continue
         if arg == "--reference-mesh-factor" and i + 1 < len(args):
@@ -319,6 +335,7 @@ def _parse_smoke_args(args):
         "problem_name": "poisson",
         "problem_kwargs": None,
         "validation_options": None,
+        "learning_rate": None,
     }
 
     i = 0
@@ -365,6 +382,13 @@ def _parse_smoke_args(args):
                 )
             i += 2
             continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
+            i += 2
+            continue
         if arg == "--reference-mesh-factor" and i + 1 < len(args):
             try:
                 options["reference_mesh_factor"] = float(args[i + 1])
@@ -408,6 +432,7 @@ def run_smoke_test(
     problem_name="poisson",
     problem_kwargs=None,
     validation_options=None,
+    learning_rate=None,
 ):
     """Run a minimal end-to-end smoke test through the real training stack."""
     print("Running smoke test...")
@@ -452,6 +477,7 @@ def run_smoke_test(
             validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
+            learning_rate=learning_rate,
         )
 
         write_run_metadata(
@@ -498,6 +524,7 @@ def run_dev_experiment(
     problem_name="poisson",
     problem_kwargs=None,
     validation_options=None,
+    learning_rate=None,
     export_images=False,
     create_gifs=False,
     generate_report=True,
@@ -546,6 +573,7 @@ def run_dev_experiment(
             validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
+            learning_rate=learning_rate,
         )
 
         write_run_metadata(
@@ -596,6 +624,7 @@ def run_screen_experiment(
     problem_name="poisson",
     problem_kwargs=None,
     validation_options=None,
+    learning_rate=None,
     export_images=False,
     create_gifs=False,
     generate_report=True,
@@ -644,6 +673,7 @@ def run_screen_experiment(
             validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
+            learning_rate=learning_rate,
         )
 
         write_run_metadata(

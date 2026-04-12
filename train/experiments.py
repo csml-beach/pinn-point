@@ -280,6 +280,7 @@ def run_mesh_refinement_method_training_fair(
     epochs,
     collocation_budget,
     export_images,
+    learning_rate,
     initial_state_dict=None,
     method_seed=None,
 ):
@@ -364,7 +365,7 @@ def run_mesh_refinement_method_training_fair(
             shared_dataset,
             epochs,
             optimizer=TRAINING_CONFIG["optimizer"],
-            lr=TRAINING_CONFIG["lr"],
+            lr=learning_rate,
             validation_dataset=validation_dataset,
             validation_residual_points=validation_residual_points,
             restore_best_epoch_checkpoint=validation_config.get(
@@ -436,6 +437,7 @@ def run_adaptive_training_fair(
     epochs,
     collocation_budget,
     export_images,
+    learning_rate,
     initial_state_dict=None,
     method_seed=None,
 ):
@@ -455,6 +457,7 @@ def run_adaptive_training_fair(
         epochs=epochs,
         collocation_budget=collocation_budget,
         export_images=export_images,
+        learning_rate=learning_rate,
         initial_state_dict=initial_state_dict,
         method_seed=method_seed,
     )
@@ -474,6 +477,7 @@ def run_method_training_fair(
     epochs: int,
     collocation_budget: int,
     export_images: bool,
+    learning_rate: float,
     initial_state_dict=None,
     method_seed=None,
 ):
@@ -564,7 +568,7 @@ def run_method_training_fair(
             shared_dataset,
             epochs,
             optimizer=TRAINING_CONFIG["optimizer"],
-            lr=TRAINING_CONFIG["lr"],
+            lr=learning_rate,
             validation_dataset=validation_dataset,
             validation_residual_points=validation_residual_points,
             restore_best_epoch_checkpoint=validation_config.get(
@@ -657,6 +661,7 @@ def run_complete_experiment(
     validation_options: dict | None = None,
     reference_mesh_factor: float | None = None,
     seed: int | None = None,
+    learning_rate: float | None = None,
 ):
     """Run the complete PINN adaptive mesh experiment.
 
@@ -678,6 +683,8 @@ def run_complete_experiment(
         num_adaptations = TRAINING_CONFIG["iterations"]
     if epochs is None:
         epochs = TRAINING_CONFIG["epochs"]
+    if learning_rate is None:
+        learning_rate = float(TRAINING_CONFIG["lr"])
     if methods_to_run is None:
         methods_to_run = ["adaptive", "random"]  # Default to current methods
     if epochs is None:
@@ -706,6 +713,7 @@ def run_complete_experiment(
     print(f"Problem: {problem.name}")
     print(f"Base seed: {seed}")
     print(f"Device: {DEVICE}")
+    print(f"Learning rate: {learning_rate}")
 
     # Create shared components for fair comparison
     print("\n" + "=" * 60)
@@ -783,6 +791,7 @@ def run_complete_experiment(
                 epochs=epochs,
                 collocation_budget=collocation_budget,
                 export_images=export_images,
+                learning_rate=learning_rate,
                 initial_state_dict=initial_model_state,
                 method_seed=method_seed,
             )
@@ -804,6 +813,7 @@ def run_complete_experiment(
                 epochs=epochs,
                 collocation_budget=collocation_budget,
                 export_images=export_images,
+                learning_rate=learning_rate,
                 initial_state_dict=initial_model_state,
                 method_seed=method_seed,
             )
@@ -858,6 +868,7 @@ def run_complete_experiment(
                     else 0
                 ),
                 "validation_config": validation_config,
+                "learning_rate": float(learning_rate),
                 "export_images": export_images,
                 "generate_report": generate_report,
             },
