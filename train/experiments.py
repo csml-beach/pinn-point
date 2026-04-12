@@ -77,8 +77,8 @@ def _build_initial_model_state(problem, vertex_array, base_seed: int):
     return state
 
 
-def _split_training_and_validation_dataset(dataset, seed: int):
-    if not VALIDATION_CONFIG.get("enabled", True):
+def _split_training_and_validation_dataset(dataset, seed: int, validation_config: dict):
+    if not validation_config.get("enabled", True):
         return dataset, None
 
     if not hasattr(dataset, "tensors") or len(dataset.tensors) != 2:
@@ -89,7 +89,7 @@ def _split_training_and_validation_dataset(dataset, seed: int):
     if total_count < 2:
         return dataset, None
 
-    holdout_fraction = float(VALIDATION_CONFIG.get("data_holdout_fraction", 0.0))
+    holdout_fraction = float(validation_config.get("data_holdout_fraction", 0.0))
     if holdout_fraction <= 0.0:
         return dataset, None
 
@@ -107,11 +107,13 @@ def _split_training_and_validation_dataset(dataset, seed: int):
     return train_dataset, validation_dataset
 
 
-def _build_fixed_residual_validation_points(problem, mesh, collocation_budget, seed: int):
-    if not VALIDATION_CONFIG.get("enabled", True):
+def _build_fixed_residual_validation_points(
+    problem, mesh, collocation_budget, seed: int, validation_config: dict
+):
+    if not validation_config.get("enabled", True):
         return None
 
-    point_count = VALIDATION_CONFIG.get("interior_point_count")
+    point_count = validation_config.get("interior_point_count")
     if point_count is None:
         point_count = collocation_budget
     point_count = max(1, int(point_count))
@@ -133,6 +135,13 @@ def _append_validation_history(model, validation_result):
     model.validation_residual_loss_history.append(
         validation_result["validation_residual_loss"]
     )
+
+
+def _resolve_validation_config(validation_options: dict | None = None):
+    config = dict(VALIDATION_CONFIG)
+    if validation_options:
+        config.update(validation_options)
+    return config
 
 
 def _record_iteration_runtime(model, runtime_sec: float):
@@ -271,6 +280,7 @@ def run_mesh_refinement_method_training_fair(
     shared_dataset,
     validation_dataset,
     validation_residual_points,
+    validation_config,
     reference_mesh,
     reference_solution,
     num_adaptations,
@@ -364,6 +374,9 @@ def run_mesh_refinement_method_training_fair(
             lr=TRAINING_CONFIG["lr"],
             validation_dataset=validation_dataset,
             validation_residual_points=validation_residual_points,
+            restore_best_epoch_checkpoint=validation_config.get(
+                "restore_best_epoch_checkpoint", True
+            ),
         )
 
         compute_model_error(
@@ -398,7 +411,10 @@ def run_mesh_refinement_method_training_fair(
             f"Iteration {iteration + 1} completed. Current mesh: {len(model.mesh_x):,} points"
         )
 
-    if best_iteration_checkpoint is not None:
+    if (
+        best_iteration_checkpoint is not None
+        and validation_config.get("restore_best_iteration_checkpoint", True)
+    ):
         restore_model_state_from_checkpoint(model, best_iteration_checkpoint)
         print(
             "Restored best validation iteration checkpoint: "
@@ -420,6 +436,7 @@ def run_adaptive_training_fair(
     shared_dataset,
     validation_dataset,
     validation_residual_points,
+    validation_config,
     reference_mesh,
     reference_solution,
     num_adaptations,
@@ -438,6 +455,7 @@ def run_adaptive_training_fair(
         shared_dataset=shared_dataset,
         validation_dataset=validation_dataset,
         validation_residual_points=validation_residual_points,
+        validation_config=validation_config,
         reference_mesh=reference_mesh,
         reference_solution=reference_solution,
         num_adaptations=num_adaptations,
@@ -456,6 +474,7 @@ def run_method_training_fair(
     shared_dataset,
     validation_dataset,
     validation_residual_points,
+    validation_config,
     reference_mesh,
     reference_solution,
     num_adaptations: int,
@@ -555,6 +574,9 @@ def run_method_training_fair(
             lr=TRAINING_CONFIG["lr"],
             validation_dataset=validation_dataset,
             validation_residual_points=validation_residual_points,
+            restore_best_epoch_checkpoint=validation_config.get(
+                "restore_best_epoch_checkpoint", True
+            ),
         )
 
         # Compute and record error
@@ -614,7 +636,10 @@ def run_method_training_fair(
                     },
                 )
 
-    if best_iteration_checkpoint is not None:
+    if (
+        best_iteration_checkpoint is not None
+        and validation_config.get("restore_best_iteration_checkpoint", True)
+    ):
         restore_model_state_from_checkpoint(model, best_iteration_checkpoint)
         print(
             "Restored best validation iteration checkpoint: "
@@ -636,6 +661,7 @@ def run_complete_experiment(
     methods_to_run=None,
     problem_name: str = "poisson",
     problem_kwargs: dict | None = None,
+    validation_options: dict | None = None,
     reference_mesh_factor: float | None = None,
     seed: int | None = None,
 ):
@@ -664,6 +690,7 @@ def run_complete_experiment(
     if epochs is None:
         epochs = TRAINING_CONFIG["epochs"]
     problem = _build_problem(problem_name, problem_kwargs)
+    validation_config = _resolve_validation_config(validation_options)
     if reference_mesh_factor is None:
         reference_mesh_factor = MESH_CONFIG["reference_mesh_factor"]
     if seed is None:
@@ -700,14 +727,14 @@ def run_complete_experiment(
     solution_array = export_fem_solution(initial_mesh, gfu, problem=problem)
     shared_training_dataset = create_dataset(vertex_array, solution_array)
     training_dataset, validation_dataset = _split_training_and_validation_dataset(
-        shared_training_dataset, seed
+        shared_training_dataset, seed, validation_config
     )
     mesh_x, mesh_y = vertex_array.T
     print(f"Shared training dataset: {len(mesh_x):,} points")
     collocation_budget = len(mesh_x)
     _log_comparison_budget_policy(epochs, collocation_budget)
     validation_residual_points = _build_fixed_residual_validation_points(
-        problem, initial_mesh, collocation_budget, seed
+        problem, initial_mesh, collocation_budget, seed, validation_config
     )
     if validation_dataset is not None:
         print(
@@ -717,6 +744,10 @@ def run_complete_experiment(
             f"{len(validation_residual_points[0]) if validation_residual_points else 0} "
             "fixed interior residual-validation points"
         )
+        if not validation_config.get("restore_best_epoch_checkpoint", True):
+            print("  Epoch-level best-checkpoint restore: disabled")
+        if not validation_config.get("restore_best_iteration_checkpoint", True):
+            print("  Iteration-level best-checkpoint restore: disabled")
     initial_model_state = _build_initial_model_state(problem, vertex_array, seed)
 
     # 2. Create high-fidelity reference solution (shared by both methods)
@@ -752,6 +783,7 @@ def run_complete_experiment(
                 shared_dataset=training_dataset,
                 validation_dataset=validation_dataset,
                 validation_residual_points=validation_residual_points,
+                validation_config=validation_config,
                 reference_mesh=reference_mesh,
                 reference_solution=reference_solution,
                 num_adaptations=num_adaptations,
@@ -772,6 +804,7 @@ def run_complete_experiment(
                 shared_dataset=training_dataset,
                 validation_dataset=validation_dataset,
                 validation_residual_points=validation_residual_points,
+                validation_config=validation_config,
                 reference_mesh=reference_mesh,
                 reference_solution=reference_solution,
                 num_adaptations=num_adaptations,
@@ -831,6 +864,7 @@ def run_complete_experiment(
                     if validation_residual_points is not None
                     else 0
                 ),
+                "validation_config": validation_config,
                 "export_images": export_images,
                 "generate_report": generate_report,
             },

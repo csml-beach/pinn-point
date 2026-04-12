@@ -52,6 +52,7 @@ def train_model(
     validation_dataset=None,
     validation_residual_points=None,
     validation_check_interval=None,
+    restore_best_epoch_checkpoint=None,
     **kwargs,
 ):
     """Train the PINN model using the specified optimizer.
@@ -73,6 +74,10 @@ def train_model(
         optimizer = TRAINING_CONFIG["optimizer"]
     if validation_check_interval is None:
         validation_check_interval = VALIDATION_CONFIG["check_interval"]
+    if restore_best_epoch_checkpoint is None:
+        restore_best_epoch_checkpoint = VALIDATION_CONFIG.get(
+            "restore_best_epoch_checkpoint", True
+        )
 
     # Set default learning rate if not provided
     if "lr" not in kwargs:
@@ -154,7 +159,7 @@ def train_model(
                     f"residual={validation_result['validation_residual_loss']:.6e})"
                 )
 
-    if best_state_dict is not None:
+    if best_state_dict is not None and restore_best_epoch_checkpoint:
         model.load_state_dict(best_state_dict)
         print(
             "Restored best validation checkpoint: "

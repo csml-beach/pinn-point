@@ -176,6 +176,8 @@ VALIDATION_CONFIG = {
     "data_holdout_fraction": 0.2,  # Hold out part of the coarse FEM labels for checkpoint selection
     "interior_point_count": None,  # If None, match the interior collocation budget
     "check_interval": 50,  # Evaluate validation score every N epochs
+    "restore_best_epoch_checkpoint": True,
+    "restore_best_iteration_checkpoint": True,
 }
 
 # Mesh parameters

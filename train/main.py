@@ -81,6 +81,18 @@ def _parse_methods_arg(raw_value, fallback_methods=None):
     return methods or list(fallback)
 
 
+def _parse_validation_options_arg(raw_value):
+    try:
+        value = json.loads(raw_value)
+    except Exception as e:
+        print(f"Warning: could not parse validation options JSON: {e}")
+        return None
+    if not isinstance(value, dict):
+        print("Warning: validation options must decode to a JSON object")
+        return None
+    return value
+
+
 def _parse_dev_args(args):
     options = {
         "seed": None,
@@ -91,6 +103,7 @@ def _parse_dev_args(args):
         "reference_mesh_factor": DEV_DEFAULT_REFERENCE_MESH_FACTOR,
         "problem_name": "poisson",
         "problem_kwargs": None,
+        "validation_options": None,
         "export_images": False,
         "create_gifs": False,
         "generate_report": True,
@@ -161,6 +174,10 @@ def _parse_dev_args(args):
                 print(f"Warning: could not parse problem kwargs JSON: {e}")
             i += 2
             continue
+        if arg == "--validation-options" and i + 1 < len(args):
+            options["validation_options"] = _parse_validation_options_arg(args[i + 1])
+            i += 2
+            continue
         if arg == "--images":
             options["export_images"] = True
             i += 1
@@ -192,6 +209,7 @@ def _parse_screen_args(args):
         "reference_mesh_factor": SCREEN_DEFAULT_REFERENCE_MESH_FACTOR,
         "problem_name": "poisson",
         "problem_kwargs": None,
+        "validation_options": None,
         "export_images": False,
         "create_gifs": False,
         "generate_report": True,
@@ -265,6 +283,10 @@ def _parse_screen_args(args):
                 print(f"Warning: could not parse problem kwargs JSON: {e}")
             i += 2
             continue
+        if arg == "--validation-options" and i + 1 < len(args):
+            options["validation_options"] = _parse_validation_options_arg(args[i + 1])
+            i += 2
+            continue
         if arg == "--images":
             options["export_images"] = True
             i += 1
@@ -296,6 +318,7 @@ def _parse_smoke_args(args):
         "reference_mesh_factor": SMOKE_DEFAULT_REFERENCE_MESH_FACTOR,
         "problem_name": "poisson",
         "problem_kwargs": None,
+        "validation_options": None,
     }
 
     i = 0
@@ -363,6 +386,10 @@ def _parse_smoke_args(args):
                 print(f"Warning: could not parse problem kwargs JSON: {e}")
             i += 2
             continue
+        if arg == "--validation-options" and i + 1 < len(args):
+            options["validation_options"] = _parse_validation_options_arg(args[i + 1])
+            i += 2
+            continue
         ignored.append(arg)
         i += 1
 
@@ -380,6 +407,7 @@ def run_smoke_test(
     reference_mesh_factor=SMOKE_DEFAULT_REFERENCE_MESH_FACTOR,
     problem_name="poisson",
     problem_kwargs=None,
+    validation_options=None,
 ):
     """Run a minimal end-to-end smoke test through the real training stack."""
     print("Running smoke test...")
@@ -421,6 +449,7 @@ def run_smoke_test(
             methods_to_run=methods_to_run,
             problem_name=problem_name,
             problem_kwargs=problem_kwargs,
+            validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
         )
@@ -468,6 +497,7 @@ def run_dev_experiment(
     reference_mesh_factor=DEV_DEFAULT_REFERENCE_MESH_FACTOR,
     problem_name="poisson",
     problem_kwargs=None,
+    validation_options=None,
     export_images=False,
     create_gifs=False,
     generate_report=True,
@@ -513,6 +543,7 @@ def run_dev_experiment(
             methods_to_run=methods_to_run,
             problem_name=problem_name,
             problem_kwargs=problem_kwargs,
+            validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
         )
@@ -564,6 +595,7 @@ def run_screen_experiment(
     reference_mesh_factor=SCREEN_DEFAULT_REFERENCE_MESH_FACTOR,
     problem_name="poisson",
     problem_kwargs=None,
+    validation_options=None,
     export_images=False,
     create_gifs=False,
     generate_report=True,
@@ -609,6 +641,7 @@ def run_screen_experiment(
             methods_to_run=methods_to_run,
             problem_name=problem_name,
             problem_kwargs=problem_kwargs,
+            validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
         )
