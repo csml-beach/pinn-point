@@ -7,9 +7,9 @@ Usage:
   submit_jetstream_cpu_all_methods_no_epoch_restore.sh [--parallel N] [--threads N] [--commit SHA] [--config PATH] [--sync-root PATH]
 
 Description:
-  Submit a 10-seed Jetstream CPU study for adaptive, random, halton, and rad on
-  advection_diffusion with iteration-level checkpoint selection enabled and
-  epoch-level best-checkpoint restore disabled.
+  Submit a 10-seed Jetstream CPU study for adaptive_persistent, adaptive,
+  random, halton, and rad on advection_diffusion with iteration-level
+  checkpoint selection enabled and epoch-level best-checkpoint restore disabled.
 EOF
 }
 
@@ -59,7 +59,7 @@ if [[ -z "$config_file" ]]; then
   config_file="$remote_ops_dir/config.jetstream-medium.env"
 fi
 if [[ -z "$sync_root" ]]; then
-  sync_root="$repo_root/outputs/jetstream-medium-advection-no-epoch-restore"
+  sync_root="$repo_root/outputs/jetstream-medium-advection-persistent-fiveway-no-epoch-restore"
 fi
 
 if [[ ! -f "$config_file" ]]; then
@@ -75,7 +75,7 @@ export CONFIG_FILE="$config_file"
 # shellcheck disable=SC1090
 source "$remote_ops_dir/lib.sh"
 
-runner_dir="/tmp/pinn_point_jetstream_no_epoch_restore_runners"
+runner_dir="/tmp/pinn_point_jetstream_persistent_fiveway_no_epoch_restore_runners"
 manifest_dir="$sync_root/_manifests"
 mkdir -p "$runner_dir" "$manifest_dir" "$sync_root"
 
@@ -100,7 +100,7 @@ remote_exec "
 
 submit_seed() {
   local seed="$1"
-  local session="cpu-no-epoch-restore-seed${seed}"
+  local session="cpu-persist-fiveway-seed${seed}"
   local remote_log="$REMOTE_REPO_PATH/.remote_opps/logs/${session}.log"
   local remote_runner="$REMOTE_REPO_PATH/.remote_opps/run_${session}.sh"
   local local_runner="$runner_dir/${session}.sh"
@@ -129,7 +129,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   screen \\
   --seed $seed \\
   --problem advection_diffusion \\
-  --methods adaptive,random,halton,rad \\
+  --methods adaptive_persistent,adaptive,random,halton,rad \\
   --iterations 8 \\
   --epochs 300 \\
   --reference-mesh-factor 0.05 \\

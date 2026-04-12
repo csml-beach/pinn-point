@@ -49,7 +49,11 @@ from utils import (
 from visualization import create_multi_method_visualizations
 
 
-MESH_REFINEMENT_METHODS = {"adaptive", "adaptive_hybrid_anchor"}
+MESH_REFINEMENT_METHODS = {
+    "adaptive",
+    "adaptive_persistent",
+    "adaptive_hybrid_anchor",
+}
 
 
 def _build_problem(problem_name: str = "poisson", problem_kwargs: dict | None = None):
@@ -206,6 +210,17 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         )
         method.description = (
             "Residual-guided interior sampling with mixed area/density scoring"
+        )
+    elif method_name == "adaptive_persistent":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            area_exponent=0.5,
+            persistence_alpha=0.6,
+        )
+        method.description = (
+            "Residual-guided interior sampling with persistence-weighted scoring"
         )
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(
