@@ -4,15 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_jetstream_cpu_adaptive_density_compare.sh [--parallel N] [--threads N] [--commit SHA] [--config PATH] [--sync-root PATH]
+  submit_jetstream_cpu_all_methods_no_epoch_restore.sh [--parallel N] [--threads N] [--commit SHA] [--config PATH] [--sync-root PATH]
 
 Description:
-  Submit a 10-seed Jetstream CPU study comparing adaptive vs adaptive_density
-  on advection_diffusion. This study disables epoch-level best-checkpoint
-  restore via --validation-options while leaving iteration-level selection
-  unchanged. The remote repo is bootstrapped and pinned once before parallel
-  launch. Each seed runs in its own tmux session and syncs back automatically
-  when complete.
+  Submit a 10-seed Jetstream CPU study for adaptive, random, halton, and rad on
+  advection_diffusion with iteration-level checkpoint selection enabled and
+  epoch-level best-checkpoint restore disabled.
 EOF
 }
 
@@ -62,14 +59,13 @@ if [[ -z "$config_file" ]]; then
   config_file="$remote_ops_dir/config.jetstream-medium.env"
 fi
 if [[ -z "$sync_root" ]]; then
-  sync_root="$repo_root/outputs/jetstream-medium-adaptive-density-compare"
+  sync_root="$repo_root/outputs/jetstream-medium-advection-no-epoch-restore"
 fi
 
 if [[ ! -f "$config_file" ]]; then
   echo "Config file not found: $config_file" >&2
   exit 1
 fi
-
 if [[ ! -d "$remote_ops_dir" ]]; then
   echo "remote-ops dir not found: $remote_ops_dir" >&2
   exit 1
@@ -79,7 +75,7 @@ export CONFIG_FILE="$config_file"
 # shellcheck disable=SC1090
 source "$remote_ops_dir/lib.sh"
 
-runner_dir="/tmp/pinn_point_jetstream_adaptive_density_compare_runners"
+runner_dir="/tmp/pinn_point_jetstream_no_epoch_restore_runners"
 manifest_dir="$sync_root/_manifests"
 mkdir -p "$runner_dir" "$manifest_dir" "$sync_root"
 
@@ -104,7 +100,7 @@ remote_exec "
 
 submit_seed() {
   local seed="$1"
-  local session="cpu-advdens-compare-seed${seed}"
+  local session="cpu-no-epoch-restore-seed${seed}"
   local remote_log="$REMOTE_REPO_PATH/.remote_opps/logs/${session}.log"
   local remote_runner="$REMOTE_REPO_PATH/.remote_opps/run_${session}.sh"
   local local_runner="$runner_dir/${session}.sh"
@@ -133,7 +129,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   screen \\
   --seed $seed \\
   --problem advection_diffusion \\
-  --methods adaptive,adaptive_density \\
+  --methods adaptive,random,halton,rad \\
   --iterations 8 \\
   --epochs 300 \\
   --reference-mesh-factor 0.05 \\

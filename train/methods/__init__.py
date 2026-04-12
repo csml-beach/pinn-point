@@ -34,8 +34,6 @@ from .rad import RADMethod
 # Registry of available methods for CLI/config selection
 METHOD_REGISTRY = {
     "adaptive": AdaptiveMethod,
-    "adaptive_mixed": AdaptiveMethod,
-    "adaptive_density": AdaptiveMethod,
     "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,
     "halton": HaltonMethod,

@@ -207,28 +207,6 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         method.description = (
             "Residual-guided interior sampling with mixed area/density scoring"
         )
-    elif method_name == "adaptive_mixed":
-        method = get_method(
-            method_name,
-            refinement_threshold=MESH_CONFIG["refinement_threshold"],
-            seed=method_seed,
-            area_exponent=0.5,
-        )
-        method.name = method_name
-        method.description = (
-            "Residual-guided interior sampling with mixed area/density scoring"
-        )
-    elif method_name == "adaptive_density":
-        method = get_method(
-            method_name,
-            refinement_threshold=MESH_CONFIG["refinement_threshold"],
-            seed=method_seed,
-            area_exponent=0.0,
-        )
-        method.name = method_name
-        method.description = (
-            "Residual-guided interior sampling with residual-density scoring"
-        )
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(
             method_name,
