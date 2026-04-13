@@ -52,7 +52,7 @@ done
 repo_root="$(git rev-parse --show-toplevel)"
 remote_ops_dir="$repo_root/../remote-ops/pinn-point"
 if [[ -z "$config_file" ]]; then
-  config_file="$remote_ops_dir/config.jetstream-medium.env"
+  config_file="$remote_ops_dir/config.m3-large-cpu.env"
 fi
 
 if [[ ! -f "$config_file" ]]; then
@@ -86,43 +86,40 @@ remote_exec "
 "
 
 submit_seed() {
-  local seed=\"$1\"
-  local spec=\"$spec_dir/cpu-advdiff-confirm-seed${seed}.json\"
-  cat > \"$spec\" <<JSON
+  local seed="$1"
+  local spec="$spec_dir/cpu-advdiff-confirm-seed${seed}.json"
+  cat > "$spec" <<JSON
 {
-  \"tag\": \"cpu-advdiff-confirm-seed${seed}\",
-  \"device\": \"cpu\",
-  \"num_threads\": ${threads_per_job},
-  \"seed\": ${seed},
-  \"mesh_size\": 0.7,
-  \"num_adaptations\": 8,
-  \"epochs\": 300,
-  \"export_images\": false,
-  \"create_gifs\": false,
-  \"generate_report\": true,
-  \"methods_to_run\": [\"adaptive\", \"random\", \"halton\", \"rad\"],
-  \"problem_name\": \"advection_diffusion\",
-  \"problem_kwargs\": {},
-  \"reference_mesh_factor\": 0.05
+  "tag": "cpu-advdiff-confirm-seed${seed}",
+  "device": "cpu",
+  "num_threads": ${threads_per_job},
+  "seed": ${seed},
+  "mesh_size": 0.7,
+  "num_adaptations": 8,
+  "epochs": 300,
+  "export_images": false,
+  "create_gifs": false,
+  "generate_report": true,
+  "methods_to_run": ["adaptive", "random", "halton", "rad"],
+  "problem_name": "advection_diffusion",
+  "problem_kwargs": {},
+  "reference_mesh_factor": 0.05
 }
 JSON
 
-  echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] submit seed=${seed} threads=${threads_per_job}\"
-  CONFIG_FILE=\"$config_file\" \"$remote_ops_dir/go.sh\" \
-    --spec \"$spec\" \
-    --session \"cpu-advdiff-confirm-seed${seed}\" \
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] submit seed=${seed} threads=${threads_per_job}"
+  CONFIG_FILE="$config_file" "$remote_ops_dir/go.sh" \
+    --spec "$spec" \
+    --session "cpu-advdiff-confirm-seed${seed}" \
     --wait
-  echo \"[$(date -u +%Y-%m-%dT%H:%M:%SZ)] done seed=${seed}\"
+  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] done seed=${seed}"
 }
 
-active_jobs=0
-for seed in \"${seeds[@]}\"; do
-  submit_seed \"$seed\" &
-  active_jobs=$((active_jobs + 1))
-  if (( active_jobs >= parallel_jobs )); then
-    wait -n
-    active_jobs=$((active_jobs - 1))
-  fi
+for seed in "${seeds[@]}"; do
+  while (( $(jobs -pr | wc -l | tr -d ' ') >= parallel_jobs )); do
+    sleep 1
+  done
+  submit_seed "$seed" &
 done
 
 wait

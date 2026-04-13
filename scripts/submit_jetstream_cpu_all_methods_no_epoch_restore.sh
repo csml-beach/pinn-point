@@ -56,10 +56,10 @@ done
 repo_root="$(git rev-parse --show-toplevel)"
 remote_ops_dir="$repo_root/../remote-ops/pinn-point"
 if [[ -z "$config_file" ]]; then
-  config_file="$remote_ops_dir/config.jetstream-medium.env"
+  config_file="$remote_ops_dir/config.m3-large-cpu.env"
 fi
 if [[ -z "$sync_root" ]]; then
-  sync_root="$repo_root/outputs/jetstream-medium-advection-persistent-fiveway-no-epoch-restore"
+  sync_root="$repo_root/outputs/m3-large-cpu-advection-persistent-fiveway-no-epoch-restore"
 fi
 
 if [[ ! -f "$config_file" ]]; then
