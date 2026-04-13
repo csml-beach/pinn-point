@@ -7,6 +7,8 @@ that can be solved using Physics-Informed Neural Networks.
 Available problems:
     - PoissonProblem: Poisson equation with localized source bumps
     - AdvectionDiffusionProblem: steady advection-diffusion-reaction equation
+    - NavierStokesChannelObstacleProblem: geometry-first prototype for a future
+      transient Navier-Stokes benchmark
     
 To add a new problem:
     1. Create a new file in this directory (e.g., heat.py)
@@ -15,7 +17,11 @@ To add a new problem:
     4. Register in this __init__.py
 
 Example:
-    from problems import PoissonProblem, AdvectionDiffusionProblem
+    from problems import (
+        PoissonProblem,
+        AdvectionDiffusionProblem,
+        NavierStokesChannelObstacleProblem,
+    )
     
     problem = PoissonProblem()
     residual = problem.pde_residual(model, x, y)
@@ -24,12 +30,14 @@ Example:
 
 from .base import PDEProblem
 from .advection_diffusion import AdvectionDiffusionProblem
+from .navier_stokes_channel_obstacle import NavierStokesChannelObstacleProblem
 from .poisson import PoissonProblem
 
 # Registry of available problems for CLI/config selection
 PROBLEM_REGISTRY = {
     "poisson": PoissonProblem,
     "advection_diffusion": AdvectionDiffusionProblem,
+    "navier_stokes_channel_obstacle": NavierStokesChannelObstacleProblem,
 }
 
 
