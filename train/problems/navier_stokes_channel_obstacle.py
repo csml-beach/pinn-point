@@ -47,6 +47,12 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         fe_order: int = 2,
         inlet_peak_velocity: float = 1.5,
         supervised_time_slices: int = 6,
+        inlet_loss_weight: float = 4.0,
+        outlet_loss_weight: float = 1.0,
+        wall_loss_weight: float = 1.0,
+        obstacle_loss_weight: float = 1.0,
+        initial_loss_weight: float = 1.0,
+        data_loss_weight: float = 1.0,
     ):
         self.length = float(length)
         self.height = float(height)
@@ -60,6 +66,12 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         self.fe_order = int(fe_order)
         self.inlet_peak_velocity = float(inlet_peak_velocity)
         self.supervised_time_slices = max(int(supervised_time_slices), 2)
+        self.inlet_loss_weight = float(inlet_loss_weight)
+        self.outlet_loss_weight = float(outlet_loss_weight)
+        self.wall_loss_weight = float(wall_loss_weight)
+        self.obstacle_loss_weight = float(obstacle_loss_weight)
+        self.initial_loss_weight = float(initial_loss_weight)
+        self.data_loss_weight = float(data_loss_weight)
         self.obstacle_centers = (
             (2.0, 0.95),
             (4.4, 2.05),
@@ -462,6 +474,11 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             )
         return torch.mean(torch.square(velocity_predictions - targets))
 
+    def get_loss_weight_overrides(self) -> dict[str, float]:
+        return {
+            "w_data": self.data_loss_weight,
+        }
+
     def create_training_dataset(
         self, mesh, fem_solution: Any | None = None, seed: int | None = None
     ) -> TensorDataset:
@@ -578,9 +595,21 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         target_u0, target_v0 = self._evaluate_initial_velocity(init_x, init_y)
         initial_loss = torch.mean((init_u - target_u0).square() + (init_v - target_v0).square())
 
-        return 0.2 * (
-            inlet_loss + outlet_loss + wall_loss + circle_loss + initial_loss
+        total_weight = (
+            self.inlet_loss_weight
+            + self.outlet_loss_weight
+            + self.wall_loss_weight
+            + self.obstacle_loss_weight
+            + self.initial_loss_weight
         )
+        weighted_sum = (
+            self.inlet_loss_weight * inlet_loss
+            + self.outlet_loss_weight * outlet_loss
+            + self.wall_loss_weight * wall_loss
+            + self.obstacle_loss_weight * circle_loss
+            + self.initial_loss_weight * initial_loss
+        )
+        return weighted_sum / max(total_weight, 1e-12)
 
     def source_term(
         self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None

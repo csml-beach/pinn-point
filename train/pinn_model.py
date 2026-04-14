@@ -60,6 +60,13 @@ class FeedForward(nn.Module):
         self.w_data = MODEL_CONFIG["w_data"]
         self.w_interior = MODEL_CONFIG["w_interior"]
         self.w_bc = MODEL_CONFIG["w_bc"]
+        for key, value in dict(getattr(problem, "get_loss_weight_overrides", lambda: {})()).items():
+            if key == "w_data":
+                self.w_data = float(value)
+            elif key == "w_interior":
+                self.w_interior = float(value)
+            elif key == "w_bc":
+                self.w_bc = float(value)
 
         # Network architecture parameters
         self.hidden_size = MODEL_CONFIG["hidden_size"]

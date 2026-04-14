@@ -125,6 +125,10 @@ class PDEProblem(ABC):
         """Return temporal bounds for transient problems, else None."""
         return None
 
+    def get_loss_weight_overrides(self) -> dict[str, float]:
+        """Optional problem-specific overrides for model loss weights."""
+        return {}
+
     def data_loss(
         self, model: Any, coordinates: torch.Tensor, targets: torch.Tensor
     ) -> torch.Tensor:
