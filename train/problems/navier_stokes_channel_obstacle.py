@@ -230,7 +230,13 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
     def _sample_interior_points(
         self, num_points: int, device: torch.device
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        from methods.sampling import points_to_tensors, sample_points_in_domain
+        points = self._sample_interior_point_array(num_points)
+        x_points = torch.tensor(points[:, 0], dtype=torch.float32, device=device)
+        y_points = torch.tensor(points[:, 1], dtype=torch.float32, device=device)
+        return x_points, y_points
+
+    def _sample_interior_point_array(self, num_points: int) -> np.ndarray:
+        from methods.sampling import sample_points_in_domain
 
         bounds = self.get_domain_bounds()
         rng = np.random.RandomState()
@@ -246,8 +252,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             ),
             warn_label="navier_stokes_interior_points",
         )
-        x_points, y_points = points_to_tensors(points)
-        return x_points.to(device), y_points.to(device)
+        return np.asarray(points, dtype=np.float64)
 
     def _sample_time_points(
         self, count: int, device: torch.device
@@ -373,6 +378,41 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             v_values.append(float(vel[1]))
         device = x_points.device
         return (
+            torch.tensor(u_values, dtype=torch.float32, device=device),
+            torch.tensor(v_values, dtype=torch.float32, device=device),
+        )
+
+    def _sample_initial_condition_batch(
+        self, count: int, device: torch.device
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        cached = self._get_initial_state_cache()
+        mesh = self._get_sampling_mesh()
+        velocity_field, _ = cached["state"].components
+
+        points = self._sample_interior_point_array(count)
+        x_values = []
+        y_values = []
+        u_values = []
+        v_values = []
+
+        for x_coord, y_coord in points:
+            mip = mesh(float(x_coord), float(y_coord))
+            if mip.nr == -1:
+                continue
+            vel = velocity_field(mip)
+            x_values.append(float(x_coord))
+            y_values.append(float(y_coord))
+            u_values.append(float(vel[0]))
+            v_values.append(float(vel[1]))
+
+        if len(x_values) != count:
+            raise RuntimeError(
+                f"Initial-condition batch lost {count - len(x_values)} points during mesh evaluation"
+            )
+
+        return (
+            torch.tensor(x_values, dtype=torch.float32, device=device),
+            torch.tensor(y_values, dtype=torch.float32, device=device),
             torch.tensor(u_values, dtype=torch.float32, device=device),
             torch.tensor(v_values, dtype=torch.float32, device=device),
         )
@@ -1070,11 +1110,12 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         circle_u, circle_v, _ = self._split_prediction(circle_prediction)
         circle_loss = torch.mean(circle_u.square() + circle_v.square())
 
-        init_x, init_y = self._sample_interior_points(initial_count, device)
+        init_x, init_y, target_u0, target_v0 = self._sample_initial_condition_batch(
+            initial_count, device
+        )
         init_t = torch.zeros(initial_count, dtype=torch.float32, device=device)
         init_prediction = model.forward(init_x, init_y, init_t)
         init_u, init_v, _ = self._split_prediction(init_prediction)
-        target_u0, target_v0 = self._evaluate_initial_velocity(init_x, init_y)
         initial_loss = torch.mean((init_u - target_u0).square() + (init_v - target_v0).square())
 
         total_weight = (
