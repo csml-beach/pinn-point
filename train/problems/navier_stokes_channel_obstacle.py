@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import TensorDataset
 from netgen.occ import OCCGeometry, WorkPlane, X, Y
 from ngsolve import *
+from scipy.stats import qmc
 
 from .base import PDEProblem
 
@@ -55,6 +56,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         data_loss_weight: float = 1.0,
         flux_loss_weight: float = 0.1,
         flux_probe_count: int = 256,
+        smoke_collocation_count: int = 1024,
     ):
         self.length = float(length)
         self.height = float(height)
@@ -76,6 +78,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         self.data_loss_weight = float(data_loss_weight)
         self.flux_loss_weight = float(flux_loss_weight)
         self.flux_probe_count = max(int(flux_probe_count), 32)
+        self.smoke_collocation_count = max(int(smoke_collocation_count), 128)
         self.obstacle_centers = (
             (2.0, 0.95),
             (4.4, 2.05),
@@ -724,6 +727,48 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         if flux_supervision is not None:
             dataset.flux_supervision = flux_supervision
         return dataset
+
+    def create_smoke_collocation_points(
+        self, mesh, seed: int | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        seed_value = 42 if seed is None else int(seed)
+        sampler = qmc.Halton(d=3, scramble=True, seed=seed_value)
+
+        x_min, x_max, y_min, y_max = self.get_domain_bounds()
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        t_min, t_max = self.get_time_bounds()
+        t_range = t_max - t_min
+
+        accepted = []
+        batch_size = max(4 * self.smoke_collocation_count, 512)
+        max_batches = 50
+
+        for _ in range(max_batches):
+            unit_points = sampler.random(batch_size)
+            x_vals = x_min + x_range * unit_points[:, 0]
+            y_vals = y_min + y_range * unit_points[:, 1]
+            t_vals = t_min + t_range * unit_points[:, 2]
+            for x_value, y_value, t_value in zip(x_vals, y_vals, t_vals):
+                if self._point_is_in_fluid(mesh, float(x_value), float(y_value)):
+                    accepted.append((float(x_value), float(y_value), float(t_value)))
+                    if len(accepted) >= self.smoke_collocation_count:
+                        break
+            if len(accepted) >= self.smoke_collocation_count:
+                break
+
+        if len(accepted) < self.smoke_collocation_count:
+            raise ValueError(
+                f"Only generated {len(accepted)}/{self.smoke_collocation_count} "
+                "Navier-Stokes smoke collocation points"
+            )
+
+        points = np.asarray(accepted, dtype=np.float32)
+        return (
+            torch.tensor(points[:, 0], dtype=torch.float32),
+            torch.tensor(points[:, 1], dtype=torch.float32),
+            torch.tensor(points[:, 2], dtype=torch.float32),
+        )
 
     def pde_residual(
         self,

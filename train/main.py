@@ -470,9 +470,24 @@ def run_pinn_smoke(
         dataset = create_dataset(vertex_array, solution_array)
 
     coords, targets = dataset.tensors
-    spatial_vertices = export_vertex_coordinates(mesh)
-    mesh_x, mesh_y = spatial_vertices.T
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    collocation_points = None
+    if hasattr(problem, "create_smoke_collocation_points"):
+        collocation_points = problem.create_smoke_collocation_points(mesh, seed=seed)
+
+    if collocation_points is not None:
+        mesh_x, mesh_y, mesh_t = collocation_points
+        model = FeedForward(
+            mesh_x=mesh_x,
+            mesh_y=mesh_y,
+            mesh_t=mesh_t,
+            problem=problem,
+        ).to(DEVICE)
+        collocation_mode = "problem-defined"
+    else:
+        spatial_vertices = export_vertex_coordinates(mesh)
+        mesh_x, mesh_y = spatial_vertices.T
+        model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+        collocation_mode = "mesh-vertices"
 
     if learning_rate is None:
         learning_rate = float(TRAINING_CONFIG["lr"])
@@ -533,6 +548,7 @@ def run_pinn_smoke(
             "dataset_coordinate_dim": int(coords.shape[1]),
             "dataset_target_dim": int(targets.shape[1]) if targets.ndim == 2 else 1,
             "collocation_point_count": int(len(model.mesh_x)),
+            "collocation_mode": collocation_mode,
             "initial_data_loss": initial_data_loss,
             "initial_interior_loss": initial_interior_loss,
             "initial_bc_loss": initial_bc_loss,

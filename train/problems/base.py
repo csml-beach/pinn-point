@@ -158,6 +158,15 @@ class PDEProblem(ABC):
         """
         return None
 
+    def create_smoke_collocation_points(
+        self, mesh, seed: int | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None] | None:
+        """Optionally build problem-specific PINN smoke collocation points.
+
+        Returning None falls back to the legacy mesh-vertex collocation path.
+        """
+        return None
+
     def export_fem_solution(self, mesh, gfu) -> torch.Tensor:
         """Evaluate a FEM solution at mesh vertices.
 
