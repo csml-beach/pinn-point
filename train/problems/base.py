@@ -125,6 +125,19 @@ class PDEProblem(ABC):
         """Return temporal bounds for transient problems, else None."""
         return None
 
+    def augment_collocation_points(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        *,
+        mesh: Any | None = None,
+        iteration: int = 0,
+        seed: int | None = None,
+        purpose: str = "train",
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Optionally attach extra coordinates (for example time) to collocation points."""
+        return x, y, None
+
     def get_loss_weight_overrides(self) -> dict[str, float]:
         """Optional problem-specific overrides for model loss weights."""
         return {}
@@ -166,6 +179,25 @@ class PDEProblem(ABC):
         Returning None falls back to the legacy mesh-vertex collocation path.
         """
         return None
+
+    def create_reference_solution(self, mesh_size_factor: float = 0.05):
+        """Optionally build a problem-specific reference solution payload."""
+        return None
+
+    def evaluate_model_against_reference(
+        self,
+        model: Any,
+        reference_mesh: Any,
+        reference_solution: Any,
+        *,
+        export_images: bool = False,
+        iteration: int | None = None,
+    ) -> bool:
+        """Optionally evaluate a model against a problem-specific reference payload.
+
+        Return True when evaluation was handled by the problem.
+        """
+        return False
 
     def export_fem_solution(self, mesh, gfu) -> torch.Tensor:
         """Evaluate a FEM solution at mesh vertices.

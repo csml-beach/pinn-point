@@ -655,6 +655,18 @@ def compute_model_error(
     Returns:
         None (updates model error history)
     """
+    problem = getattr(model, "problem", None)
+    if problem is not None and hasattr(problem, "evaluate_model_against_reference"):
+        handled = problem.evaluate_model_against_reference(
+            model,
+            reference_mesh,
+            reference_solution,
+            export_images=export_images,
+            iteration=iteration,
+        )
+        if handled:
+            return
+
     from geometry import export_vertex_coordinates
 
     # Get reference mesh coordinates
@@ -874,16 +886,24 @@ def create_reference_solution(problem, mesh_size_factor=0.05):
     Returns:
         tuple: (reference_mesh, reference_solution)
     """
-    print(
-        f"Creating high-fidelity reference solution with mesh size factor {mesh_size_factor}..."
-    )
-    print("Warning: This may take significant time and memory!")
+    custom_reference = None
+    if hasattr(problem, "create_reference_solution"):
+        custom_reference = problem.create_reference_solution(
+            mesh_size_factor=mesh_size_factor
+        )
+    if custom_reference is not None:
+        reference_mesh, reference_solution = custom_reference
+    else:
+        print(
+            f"Creating high-fidelity reference solution with mesh size factor {mesh_size_factor}..."
+        )
+        print("Warning: This may take significant time and memory!")
 
-    # Create very fine mesh
-    reference_mesh = problem.create_mesh(maxh=mesh_size_factor)
+        # Create very fine mesh
+        reference_mesh = problem.create_mesh(maxh=mesh_size_factor)
 
-    # Solve FEM on reference mesh
-    reference_solution, reference_fes = solve_FEM(reference_mesh, problem=problem)
+        # Solve FEM on reference mesh
+        reference_solution, reference_fes = solve_FEM(reference_mesh, problem=problem)
 
     # Count points for information
     from geometry import export_vertex_coordinates
@@ -1053,6 +1073,18 @@ def compute_random_model_error(
     Returns:
         None (updates model error history)
     """
+    problem = getattr(model, "problem", None)
+    if problem is not None and hasattr(problem, "evaluate_model_against_reference"):
+        handled = problem.evaluate_model_against_reference(
+            model,
+            reference_mesh,
+            reference_solution,
+            export_images=export_images,
+            iteration=iteration,
+        )
+        if handled:
+            return
+
     # Get reference mesh coordinates
     from fem_solver import export_vertex_coordinates
 

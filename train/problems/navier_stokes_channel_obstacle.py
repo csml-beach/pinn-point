@@ -9,6 +9,7 @@ This module currently provides:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
@@ -57,6 +58,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         flux_loss_weight: float = 0.1,
         flux_probe_count: int = 256,
         smoke_collocation_count: int = 1024,
+        reference_time_slices: int = 11,
     ):
         self.length = float(length)
         self.height = float(height)
@@ -79,6 +81,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         self.flux_loss_weight = float(flux_loss_weight)
         self.flux_probe_count = max(int(flux_probe_count), 32)
         self.smoke_collocation_count = max(int(smoke_collocation_count), 128)
+        self.reference_time_slices = max(int(reference_time_slices), 2)
         self.obstacle_centers = (
             (2.0, 0.95),
             (4.4, 2.05),
@@ -252,6 +255,18 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         return self.dt + (self.t_end - self.dt) * torch.rand(
             count, dtype=torch.float32, device=device
         )
+
+    def _halton_time_coordinates(
+        self,
+        count: int,
+        *,
+        seed: int | None = None,
+    ) -> torch.Tensor:
+        seed_value = 1729 if seed is None else int(seed)
+        sampler = qmc.Halton(d=1, scramble=True, seed=seed_value)
+        unit = sampler.random(int(count)).reshape(-1)
+        time_values = self.dt + (self.t_end - self.dt) * unit
+        return torch.tensor(time_values, dtype=torch.float32)
 
     def _sample_segment_points(
         self,
@@ -769,6 +784,211 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             torch.tensor(points[:, 1], dtype=torch.float32),
             torch.tensor(points[:, 2], dtype=torch.float32),
         )
+
+    def augment_collocation_points(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        *,
+        mesh: Any | None = None,
+        iteration: int = 0,
+        seed: int | None = None,
+        purpose: str = "train",
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        purpose_offsets = {
+            "initial": 101,
+            "train": 211,
+            "validation": 307,
+            "adaptive_score": 401,
+        }
+        seed_value = (
+            purpose_offsets.get(str(purpose), 503) + 1009 * int(iteration)
+            if seed is None
+            else int(seed) + purpose_offsets.get(str(purpose), 503) + 1009 * int(iteration)
+        )
+        t = self._halton_time_coordinates(len(x), seed=seed_value).to(
+            device=x.device if isinstance(x, torch.Tensor) else None
+        )
+        return x, y, t
+
+    def create_reference_solution(self, mesh_size_factor: float = 0.05):
+        reference_mesh = self.create_mesh(maxh=mesh_size_factor)
+        snapshot_times = np.linspace(
+            0.0, self.t_end, self.reference_time_slices
+        ).tolist()
+        reference_solution = self.solve_fem_time_series(
+            reference_mesh, snapshot_times=snapshot_times
+        )
+        return reference_mesh, reference_solution
+
+    def _save_scalar_snapshot_plot(
+        self, mesh, values: np.ndarray, title: str, output_path: str
+    ) -> str:
+        import matplotlib.pyplot as plt
+        import matplotlib.tri as mtri
+
+        verts = [(float(v.point[0]), float(v.point[1])) for v in mesh.vertices]
+        triangles = []
+        for el in mesh.Elements():
+            if getattr(el, "vertices", None) and len(el.vertices) == 3:
+                triangles.append([v.nr for v in el.vertices])
+        if not verts or not triangles:
+            raise RuntimeError("Could not extract triangular reference mesh connectivity")
+        xs, ys = zip(*verts)
+        triang = mtri.Triangulation(xs, ys, triangles)
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        fig, ax = plt.subplots(figsize=(10, 4))
+        tpc = ax.tripcolor(
+            triang,
+            np.asarray(values, dtype=float),
+            shading="gouraud",
+            cmap="viridis",
+        )
+        ax.set_aspect("equal")
+        ax.set_title(title)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        fig.colorbar(tpc, ax=ax)
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        return output_path
+
+    def evaluate_model_against_reference(
+        self,
+        model: Any,
+        reference_mesh: Any,
+        reference_solution: Any,
+        *,
+        export_images: bool = False,
+        iteration: int | None = None,
+    ) -> bool:
+        if not isinstance(reference_solution, dict) or "snapshots" not in reference_solution:
+            return False
+
+        from paths import comparison_images_dir, method_images_dir
+
+        device = next(model.parameters()).device
+        vertex_coords = np.asarray(reference_solution["vertex_coords"], dtype=np.float32)
+        if vertex_coords.ndim != 2 or vertex_coords.shape[1] != 2:
+            return False
+
+        snapshot_times = []
+        reference_u_batches = []
+        reference_v_batches = []
+        coordinate_batches = []
+        velocity_magnitude_predictions = []
+        velocity_magnitude_references = []
+
+        for snapshot in reference_solution["snapshots"]:
+            time_value = float(snapshot["time"])
+            time_column = np.full((len(vertex_coords), 1), time_value, dtype=np.float32)
+            coordinate_batches.append(np.hstack((vertex_coords, time_column)))
+            reference_u = np.asarray(snapshot["u_velocity"], dtype=np.float32)
+            reference_v = np.asarray(snapshot["v_velocity"], dtype=np.float32)
+            reference_u_batches.append(reference_u)
+            reference_v_batches.append(reference_v)
+            snapshot_times.append(time_value)
+            velocity_magnitude_references.append(
+                np.asarray(snapshot["velocity_magnitude"], dtype=np.float32)
+            )
+
+        all_coords = torch.tensor(
+            np.vstack(coordinate_batches), dtype=torch.float32, device=device
+        )
+        reference_u = np.concatenate(reference_u_batches)
+        reference_v = np.concatenate(reference_v_batches)
+
+        with torch.no_grad():
+            prediction = model.forward(all_coords)
+        pred_u = prediction[:, 0].detach().cpu().numpy()
+        pred_v = prediction[:, 1].detach().cpu().numpy()
+
+        error_sq = (pred_u - reference_u) ** 2 + (pred_v - reference_v) ** 2
+        reference_sq = reference_u**2 + reference_v**2
+        total_error = float(np.mean(error_sq))
+        boundary_error = float(model.loss_boundary_condition().detach().cpu())
+        reference_rms = float(np.sqrt(np.mean(reference_sq))) if np.mean(reference_sq) > 0 else float("nan")
+        error_rms = float(np.sqrt(np.mean(error_sq)))
+        relative_l2 = (
+            float(np.sqrt(total_error / float(np.mean(reference_sq))))
+            if float(np.mean(reference_sq)) > 0
+            else float("nan")
+        )
+        relative_rms = (
+            float(error_rms / reference_rms) if reference_rms > 0 else float("nan")
+        )
+
+        model.total_error_history.append(total_error)
+        model.boundary_error_history.append(boundary_error)
+        model.relative_l2_error_history.append(relative_l2)
+        model.total_error_rms_history.append(error_rms)
+        model.relative_error_rms_history.append(relative_rms)
+
+        tx = all_coords[:, 0].clone().detach().requires_grad_(True)
+        ty = all_coords[:, 1].clone().detach().requires_grad_(True)
+        tt = all_coords[:, 2].clone().detach().requires_grad_(True)
+        with torch.enable_grad():
+            residual = model.PDE_residual(tx, ty, tt)
+        residual_sq = np.square(residual.detach().cpu().numpy().reshape(-1))
+        total_residual = float(np.mean(residual_sq))
+        residual_rms = float(np.sqrt(np.mean(residual_sq)))
+        relative_residual = (
+            float(residual_rms / reference_rms) if reference_rms > 0 else float("nan")
+        )
+
+        model.fixed_total_residual_history.append(total_residual)
+        model.relative_fixed_l2_residual_history.append(relative_residual)
+        model.fixed_boundary_residual_history.append(boundary_error)
+        model.fixed_rms_residual_history.append(residual_rms)
+        model.relative_fixed_rms_residual_history.append(relative_residual)
+
+        if export_images and iteration is not None and reference_solution["snapshots"]:
+            coords_per_snapshot = len(vertex_coords)
+            last_offset = (len(reference_solution["snapshots"]) - 1) * coords_per_snapshot
+            last_slice = slice(last_offset, last_offset + coords_per_snapshot)
+            pred_vel_mag = np.sqrt(pred_u[last_slice] ** 2 + pred_v[last_slice] ** 2)
+            ref_vel_mag = velocity_magnitude_references[-1]
+            error_field = (pred_u[last_slice] - reference_u[last_slice]) ** 2 + (
+                pred_v[last_slice] - reference_v[last_slice]
+            ) ** 2
+
+            reference_path = os.path.join(
+                comparison_images_dir(), "reference_solution.png"
+            )
+            if not os.path.exists(reference_path):
+                self._save_scalar_snapshot_plot(
+                    reference_mesh,
+                    ref_vel_mag,
+                    f"Reference velocity magnitude at t={snapshot_times[-1]:.2f}",
+                    reference_path,
+                )
+
+            method_dir = method_images_dir(getattr(model, "method_name", "unknown"))
+            self._save_scalar_snapshot_plot(
+                reference_mesh,
+                pred_vel_mag,
+                f"Predicted velocity magnitude at t={snapshot_times[-1]:.2f}",
+                os.path.join(method_dir, f"solutions_{iteration}.png"),
+            )
+            self._save_scalar_snapshot_plot(
+                reference_mesh,
+                error_field,
+                f"Velocity error at t={snapshot_times[-1]:.2f}",
+                os.path.join(method_dir, f"errors_{iteration}.png"),
+            )
+
+        print(
+            "Space-time velocity error: "
+            f"MSE={total_error:.6e}, Relative L2 error={relative_l2:.6e}, "
+            f"Boundary loss={boundary_error:.6e}"
+        )
+        print(
+            "Space-time residual: "
+            f"MSE={total_residual:.6e}, Relative RMS residual={relative_residual:.6e}"
+        )
+        return True
 
     def pde_residual(
         self,

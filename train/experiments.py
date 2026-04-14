@@ -113,6 +113,36 @@ def _split_training_and_validation_dataset(dataset, seed: int, validation_config
     return train_dataset, validation_dataset
 
 
+def _augment_points_for_problem(
+    problem,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    mesh,
+    iteration: int,
+    seed: int | None,
+    purpose: str,
+):
+    if problem is None or not hasattr(problem, "augment_collocation_points"):
+        return x, y, None
+
+    augmented = problem.augment_collocation_points(
+        x,
+        y,
+        mesh=mesh,
+        iteration=int(iteration),
+        seed=seed,
+        purpose=purpose,
+    )
+    if not isinstance(augmented, tuple):
+        raise ValueError("augment_collocation_points must return a tuple")
+    if len(augmented) == 2:
+        return augmented[0], augmented[1], None
+    if len(augmented) == 3:
+        return augmented
+    raise ValueError("augment_collocation_points must return (x, y) or (x, y, t)")
+
+
 def _build_fixed_residual_validation_points(
     problem, mesh, collocation_budget, seed: int, validation_config: dict
 ):
@@ -125,11 +155,20 @@ def _build_fixed_residual_validation_points(
     point_count = max(1, int(point_count))
 
     method = _build_method_instance("halton", problem, method_seed=int(seed) + 4099)
-    return method.get_collocation_points(
+    x, y = method.get_collocation_points(
         mesh,
         model=None,
         iteration=0,
         num_points=point_count,
+    )
+    return _augment_points_for_problem(
+        problem,
+        x,
+        y,
+        mesh=mesh,
+        iteration=0,
+        seed=int(seed) + 4099,
+        purpose="validation",
     )
 
 
@@ -322,9 +361,20 @@ def run_mesh_refinement_method_training_fair(
         iteration=0,
         num_points=collocation_budget,
     )
+    init_x, init_y, init_t = _augment_points_for_problem(
+        problem,
+        init_x,
+        init_y,
+        mesh=current_mesh,
+        iteration=0,
+        seed=method_seed,
+        purpose="train",
+    )
     print(f"Initial collocation budget: {len(init_x):,} points")
 
-    model = FeedForward(mesh_x=init_x, mesh_y=init_y, problem=problem).to(DEVICE)
+    model = FeedForward(
+        mesh_x=init_x, mesh_y=init_y, mesh_t=init_t, problem=problem
+    ).to(DEVICE)
     if initial_state_dict is not None:
         model.load_state_dict(copy.deepcopy(initial_state_dict))
     model.method_name = method_name
@@ -354,7 +404,16 @@ def run_mesh_refinement_method_training_fair(
                 iteration=iteration,
                 num_points=collocation_budget,
             )
-            model.set_mesh_points(x, y)
+            x, y, t = _augment_points_for_problem(
+                problem,
+                x,
+                y,
+                mesh=current_mesh,
+                iteration=iteration,
+                seed=method_seed,
+                purpose="train",
+            )
+            model.set_mesh_points(x, y, mesh_t=t)
             sampled_points = torch.stack([x, y], dim=1).detach().cpu().clone()
             model.mesh_point_history.append(sampled_points)
             model.mesh_point_count_history.append(len(x))
@@ -526,7 +585,21 @@ def run_method_training_fair(
     print(f"Initial mesh: {initial_point_count:,} points")
 
     # Initialize model
-    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    initial_x, initial_y, initial_t = _augment_points_for_problem(
+        problem,
+        mesh_x,
+        mesh_y,
+        mesh=initial_mesh,
+        iteration=0,
+        seed=method_seed,
+        purpose="initial",
+    )
+    model = FeedForward(
+        mesh_x=initial_x,
+        mesh_y=initial_y,
+        mesh_t=initial_t,
+        problem=problem,
+    ).to(DEVICE)
     if initial_state_dict is not None:
         model.load_state_dict(copy.deepcopy(initial_state_dict))
     model.method_name = method_name
@@ -539,7 +612,7 @@ def run_method_training_fair(
     model.total_error_history = []
     model.boundary_error_history = []
     random_fe_space = None
-    if method_name == "random":
+    if method_name == "random" and not getattr(problem, "has_time_input", False):
         random_fe_space = H1(initial_mesh, order=1, dirichlet=".*")
 
     # Training iterations
@@ -556,9 +629,18 @@ def run_method_training_fair(
             iteration=iteration,
             num_points=collocation_budget,
         )
+        x, y, t = _augment_points_for_problem(
+            problem,
+            x,
+            y,
+            mesh=initial_mesh,
+            iteration=iteration,
+            seed=method_seed,
+            purpose="train",
+        )
 
         # Update model's residual computation points
-        model.set_mesh_points(x, y)
+        model.set_mesh_points(x, y, mesh_t=t)
 
         actual_count = len(model.mesh_x)
         print(f"Using {actual_count:,} {method_name} points for residual computation")
@@ -579,7 +661,7 @@ def run_method_training_fair(
         )
 
         # Compute and record error
-        if method_name == "random":
+        if method_name == "random" and random_fe_space is not None:
             compute_random_residuals(
                 model,
                 initial_mesh,
@@ -722,13 +804,21 @@ def run_complete_experiment(
     print("CREATING SHARED COMPONENTS FOR FAIR COMPARISON")
     print("=" * 60)
 
-    # 1. Create initial mesh and training dataset (shared by both methods)
+    # 1. Create initial mesh and training dataset (shared by all methods)
     print("Creating initial mesh and training dataset...")
     initial_mesh = problem.create_mesh(maxh=mesh_size)
-    gfu, fes = solve_FEM(initial_mesh, problem=problem)
-    vertex_array = export_vertex_coordinates(initial_mesh)
-    solution_array = export_fem_solution(initial_mesh, gfu, problem=problem)
-    shared_training_dataset = create_dataset(vertex_array, solution_array)
+    gfu = None
+    fes = None
+    shared_training_dataset = problem.create_training_dataset(initial_mesh, seed=seed)
+    if shared_training_dataset is None:
+        gfu, fes = solve_FEM(initial_mesh, problem=problem)
+        vertex_array = export_vertex_coordinates(initial_mesh)
+        solution_array = export_fem_solution(initial_mesh, gfu, problem=problem)
+        shared_training_dataset = create_dataset(vertex_array, solution_array)
+    else:
+        gfu, fes = solve_FEM(initial_mesh, problem=problem)
+        vertex_array = export_vertex_coordinates(initial_mesh)
+
     training_dataset, validation_dataset = _split_training_and_validation_dataset(
         shared_training_dataset, seed, validation_config
     )

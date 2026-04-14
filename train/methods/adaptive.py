@@ -146,7 +146,7 @@ class AdaptiveMethod(TrainingMethod):
         return smoothed
 
     def _evaluate_residual_scores(
-        self, mesh: Any, model: Any
+        self, mesh: Any, model: Any, iteration: int = 0
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
         triangles, areas, element_ids = self._extract_triangle_data(mesh)
 
@@ -156,9 +156,22 @@ class AdaptiveMethod(TrainingMethod):
 
         x = torch.tensor(flat_points[:, 0], dtype=torch.float32, device=model.mesh_x.device)
         y = torch.tensor(flat_points[:, 1], dtype=torch.float32, device=model.mesh_y.device)
+        t = None
+        if getattr(model, "has_time_input", False) and getattr(self, "problem", None) is not None:
+            _, _, t = self.problem.augment_collocation_points(
+                x,
+                y,
+                mesh=mesh,
+                iteration=int(iteration),
+                seed=getattr(self, "seed", None),
+                purpose="adaptive_score",
+            )
 
         with torch.enable_grad():
-            residual = model.PDE_residual(x, y)
+            if t is None:
+                residual = model.PDE_residual(x, y)
+            else:
+                residual = model.PDE_residual(x, y, t)
 
         residual_sq = torch.square(residual).detach().cpu().numpy().reshape(
             len(triangles), len(bary)
@@ -277,7 +290,7 @@ class AdaptiveMethod(TrainingMethod):
         self, mesh: Any, model: Any, iteration: int = 0
     ) -> Tuple[Any, bool]:
         triangles, areas, raw_scores, smoothed_scores, total_residual = (
-            self._evaluate_residual_scores(mesh, model)
+            self._evaluate_residual_scores(mesh, model, iteration=iteration)
         )
 
         if not hasattr(model, "total_residual_history"):
@@ -305,7 +318,7 @@ class AdaptiveMethod(TrainingMethod):
             refined_raw_scores,
             refined_smoothed_scores,
             _,
-        ) = self._evaluate_residual_scores(mesh, model)
+        ) = self._evaluate_residual_scores(mesh, model, iteration=iteration)
         self._set_sampling_distribution(
             refined_triangles, refined_areas, refined_smoothed_scores
         )

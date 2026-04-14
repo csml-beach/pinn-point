@@ -71,7 +71,7 @@ class AdaptivePersistentMethod(AdaptiveMethod):
 
     def refine_mesh(self, mesh: Any, model: Any, iteration: int = 0):
         triangles, areas, raw_scores, smoothed_scores, total_residual = (
-            self._evaluate_residual_scores(mesh, model)
+            self._evaluate_residual_scores(mesh, model, iteration=iteration)
         )
 
         if not hasattr(model, "total_residual_history"):
@@ -101,7 +101,7 @@ class AdaptivePersistentMethod(AdaptiveMethod):
             refined_raw_scores,
             refined_smoothed_scores,
             _,
-        ) = self._evaluate_residual_scores(mesh, model)
+        ) = self._evaluate_residual_scores(mesh, model, iteration=iteration)
         refined_persistent_scores = self._blend_persistent_scores(
             refined_triangles, refined_smoothed_scores
         )
@@ -146,4 +146,3 @@ class AdaptivePersistentMethod(AdaptiveMethod):
         triangles, _, _, smoothed_scores, _ = self._evaluate_residual_scores(mesh, model)
         persistent_scores = self._blend_persistent_scores(triangles, smoothed_scores)
         return torch.tensor(persistent_scores, dtype=torch.float32)
-
