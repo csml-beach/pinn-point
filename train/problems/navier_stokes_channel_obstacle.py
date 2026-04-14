@@ -53,7 +53,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         obstacle_loss_weight: float = 1.0,
         initial_loss_weight: float = 1.0,
         data_loss_weight: float = 1.0,
-        flux_loss_weight: float = 0.5,
+        flux_loss_weight: float = 0.1,
         flux_probe_count: int = 256,
     ):
         self.length = float(length)
