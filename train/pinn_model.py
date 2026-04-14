@@ -252,12 +252,12 @@ class FeedForward(nn.Module):
         xy = xy_all[idx]
         u = u_all[idx]
 
-        return self.problem.data_loss(self, xy, u)
+        return self.problem.data_loss(self, xy, u, dataset=dataset)
 
     def loss_data_on_dataset(self, dataset):
         """Compute supervised loss on the full provided dataset without resampling."""
         xy, u = self._get_cached_dataset_tensors(dataset)
-        return self.problem.data_loss(self, xy, u)
+        return self.problem.data_loss(self, xy, u, dataset=dataset)
 
     def loss_interior(self):
         """Compute interior loss based on PDE residual.

@@ -130,7 +130,11 @@ class PDEProblem(ABC):
         return {}
 
     def data_loss(
-        self, model: Any, coordinates: torch.Tensor, targets: torch.Tensor
+        self,
+        model: Any,
+        coordinates: torch.Tensor,
+        targets: torch.Tensor,
+        dataset: TensorDataset | None = None,
     ) -> torch.Tensor:
         """Compute supervised loss on problem-owned targets.
 

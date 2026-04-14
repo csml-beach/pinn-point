@@ -108,6 +108,8 @@ def _split_training_and_validation_dataset(dataset, seed: int, validation_config
 
     train_dataset = TensorDataset(xy[train_idx], u[train_idx])
     validation_dataset = TensorDataset(xy[val_idx], u[val_idx])
+    if hasattr(dataset, "flux_supervision"):
+        train_dataset.flux_supervision = dataset.flux_supervision
     return train_dataset, validation_dataset
 
 

@@ -557,6 +557,7 @@ def run_pinn_smoke(
             f"mean_speed(pred={diagnostics['overall_mean_pred_speed']:.6e}, "
             f"target={diagnostics['overall_mean_target_speed']:.6e}), "
             f"velocity_rmse={diagnostics['overall_velocity_rmse']:.6e}, "
+            f"flux_rmse={diagnostics.get('overall_flux_rmse', float('nan')):.6e}, "
             f"inlet_u_rmse(t_end)={diagnostics['inlet_u_rmse_t_end']:.6e}, "
             f"inlet_v_rmse(t_end)={diagnostics['inlet_v_rmse_t_end']:.6e}"
         )
@@ -566,6 +567,12 @@ def run_pinn_smoke(
                 f"mean_pred_speed={item['mean_pred_speed']:.6e}, "
                 f"mean_target_speed={item['mean_target_speed']:.6e}, "
                 f"velocity_rmse={item['velocity_rmse']:.6e}"
+            )
+        for item in diagnostics.get("flux_metrics", [])[:8]:
+            print(
+                f"  flux[{item['label']} @ x={item['x']:.2f}, t={item['time']:.2f}]: "
+                f"pred={item['predicted_flux']:.6e}, "
+                f"target={item['target_flux']:.6e}"
             )
     return run_id
 

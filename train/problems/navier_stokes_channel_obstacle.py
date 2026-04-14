@@ -53,6 +53,8 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         obstacle_loss_weight: float = 1.0,
         initial_loss_weight: float = 1.0,
         data_loss_weight: float = 1.0,
+        flux_loss_weight: float = 0.5,
+        flux_probe_count: int = 256,
     ):
         self.length = float(length)
         self.height = float(height)
@@ -72,6 +74,8 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         self.obstacle_loss_weight = float(obstacle_loss_weight)
         self.initial_loss_weight = float(initial_loss_weight)
         self.data_loss_weight = float(data_loss_weight)
+        self.flux_loss_weight = float(flux_loss_weight)
+        self.flux_probe_count = max(int(flux_probe_count), 32)
         self.obstacle_centers = (
             (2.0, 0.95),
             (4.4, 2.05),
@@ -362,6 +366,183 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             raise ValueError("Navier-Stokes model must output a tensor of shape (N, 3)")
         return prediction[:, 0], prediction[:, 1], prediction[:, 2]
 
+    def _point_is_in_fluid(self, mesh, x_coord: float, y_coord: float) -> bool:
+        try:
+            return mesh(float(x_coord), float(y_coord)).nr != -1
+        except Exception:
+            return False
+
+    def _default_flux_sections(self) -> list[dict[str, float]]:
+        candidate_sections = [
+            ("upstream", max(0.9, 0.16 * self.length)),
+            ("throat", self.throat_center_x),
+            ("post_throat", min(self.length - 1.2, self.throat_center_x + 1.8)),
+            ("downstream", self.length - 0.9),
+        ]
+        adjusted = []
+        clearance = 1.75 * self.obstacle_radius
+        for label, x_value in candidate_sections:
+            adjusted_x = float(x_value)
+            for center_x, _ in self.obstacle_centers:
+                if abs(adjusted_x - center_x) < clearance:
+                    shift = clearance - abs(adjusted_x - center_x) + 0.05
+                    adjusted_x += shift if adjusted_x <= center_x else -shift
+            adjusted_x = float(np.clip(adjusted_x, 0.4, self.length - 0.4))
+            adjusted.append({"label": label, "x": adjusted_x})
+        return adjusted
+
+    def _build_flux_probe_sections(
+        self,
+        mesh,
+        *,
+        num_probes: int | None = None,
+    ) -> list[dict[str, Any]]:
+        probe_count = max(int(num_probes or self.flux_probe_count), 32)
+        dy = self.height / probe_count
+        y_midpoints = (np.arange(probe_count, dtype=np.float32) + 0.5) * dy
+
+        sections = []
+        for section in self._default_flux_sections():
+            x_value = float(section["x"])
+            inside_mask = np.asarray(
+                [self._point_is_in_fluid(mesh, x_value, float(y_value)) for y_value in y_midpoints],
+                dtype=bool,
+            )
+            if not np.any(inside_mask):
+                continue
+
+            fluid_y = y_midpoints[inside_mask]
+            weights = np.full_like(fluid_y, fill_value=dy, dtype=np.float32)
+            sections.append(
+                {
+                    "label": str(section["label"]),
+                    "x": x_value,
+                    "y": fluid_y,
+                    "weights": weights,
+                }
+            )
+        return sections
+
+    def _evaluate_section_fluxes(
+        self,
+        mesh,
+        velocity_field,
+        sections: list[dict[str, Any]],
+    ) -> list[dict[str, float]]:
+        section_fluxes = []
+        for section in sections:
+            x_value = float(section["x"])
+            weights = np.asarray(section["weights"], dtype=np.float32)
+            u_values = []
+            for y_value in section["y"]:
+                velocity = velocity_field(mesh(x_value, float(y_value)))
+                u_values.append(float(velocity[0]))
+            flux_value = float(np.dot(weights, np.asarray(u_values, dtype=np.float32)))
+            section_fluxes.append(
+                {
+                    "label": str(section["label"]),
+                    "x": x_value,
+                    "flux": flux_value,
+                }
+            )
+        return section_fluxes
+
+    def _build_flux_supervision(
+        self,
+        result: Dict[str, Any],
+    ) -> Dict[str, torch.Tensor] | None:
+        probe_coordinates = []
+        probe_weights = []
+        probe_group_ids = []
+        target_fluxes = []
+        section_labels = []
+        section_times = []
+        section_positions = []
+
+        group_id = 0
+        for snapshot in result["snapshots"]:
+            fluxes = snapshot.get("section_fluxes", [])
+            probes = snapshot.get("flux_probes", [])
+            probe_lookup = {item["label"]: item for item in probes}
+            for flux_item in fluxes:
+                label = str(flux_item["label"])
+                probe_item = probe_lookup.get(label)
+                if probe_item is None:
+                    continue
+
+                y_values = np.asarray(probe_item["y"], dtype=np.float32)
+                weights = np.asarray(probe_item["weights"], dtype=np.float32)
+                if len(y_values) == 0:
+                    continue
+
+                time_column = np.full(len(y_values), float(snapshot["time"]), dtype=np.float32)
+                x_column = np.full(len(y_values), float(flux_item["x"]), dtype=np.float32)
+                probe_coordinates.append(
+                    np.column_stack((x_column, y_values, time_column)).astype(np.float32)
+                )
+                probe_weights.append(weights)
+                probe_group_ids.append(np.full(len(y_values), group_id, dtype=np.int64))
+                target_fluxes.append(float(flux_item["flux"]))
+                section_labels.append(label)
+                section_times.append(float(snapshot["time"]))
+                section_positions.append(float(flux_item["x"]))
+                group_id += 1
+
+        if not probe_coordinates:
+            return None
+
+        return {
+            "coordinates": torch.tensor(
+                np.vstack(probe_coordinates), dtype=torch.float32
+            ),
+            "weights": torch.tensor(np.concatenate(probe_weights), dtype=torch.float32),
+            "group_ids": torch.tensor(
+                np.concatenate(probe_group_ids), dtype=torch.long
+            ),
+            "target_fluxes": torch.tensor(target_fluxes, dtype=torch.float32),
+            "section_labels": section_labels,
+            "section_times": section_times,
+            "section_positions": section_positions,
+        }
+
+    def _compute_flux_predictions(
+        self,
+        model: Any,
+        flux_supervision: Dict[str, Any] | None,
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+        if not flux_supervision:
+            return None, None
+
+        device = next(model.parameters()).device
+        coordinates = torch.as_tensor(
+            flux_supervision["coordinates"],
+            dtype=torch.float32,
+            device=device,
+        )
+        weights = torch.as_tensor(
+            flux_supervision["weights"],
+            dtype=torch.float32,
+            device=device,
+        )
+        group_ids = torch.as_tensor(
+            flux_supervision["group_ids"],
+            dtype=torch.long,
+            device=device,
+        )
+        target_fluxes = torch.as_tensor(
+            flux_supervision["target_fluxes"],
+            dtype=torch.float32,
+            device=device,
+        )
+        if target_fluxes.numel() == 0:
+            return None, None
+
+        prediction = model.forward(coordinates)
+        pred_u = prediction[:, 0]
+        pred_fluxes = torch.zeros_like(target_fluxes)
+        pred_fluxes.index_add_(0, group_ids, weights * pred_u)
+        return pred_fluxes, target_fluxes
+
     def solve_fem_time_series(
         self,
         mesh,
@@ -387,6 +568,7 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         (u, p), (v, q) = Xspace.TnT()
         stokes_form = initial_state["stokes_form"]
         stiffness = initial_state["stiffness"]
+        flux_probe_sections = self._build_flux_probe_sections(mesh)
 
         mstar = BilinearForm(Xspace)
         mstar += InnerProduct(u, v) * dx + dt * stokes_form
@@ -422,6 +604,20 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
                     "v_velocity": v_vals,
                     "velocity_magnitude": vel_vals,
                     "pressure": pressure_vals,
+                    "section_fluxes": self._evaluate_section_fluxes(
+                        mesh, velocity, flux_probe_sections
+                    ),
+                    "flux_probes": [
+                        {
+                            "label": str(section["label"]),
+                            "x": float(section["x"]),
+                            "y": np.asarray(section["y"], dtype=np.float32).tolist(),
+                            "weights": np.asarray(
+                                section["weights"], dtype=np.float32
+                            ).tolist(),
+                        }
+                        for section in flux_probe_sections
+                    ],
                 }
             )
 
@@ -459,7 +655,11 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
         return result["state"], result["space"]
 
     def data_loss(
-        self, model: Any, coordinates: torch.Tensor, targets: torch.Tensor
+        self,
+        model: Any,
+        coordinates: torch.Tensor,
+        targets: torch.Tensor,
+        dataset: TensorDataset | None = None,
     ) -> torch.Tensor:
         predictions = model.forward(coordinates)
         velocity_predictions = predictions[:, :2]
@@ -472,7 +672,20 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             raise ValueError(
                 "Navier-Stokes coarse supervision expects targets shaped (N, 2) for (u, v)"
             )
-        return torch.mean(torch.square(velocity_predictions - targets))
+        velocity_loss = torch.mean(torch.square(velocity_predictions - targets))
+
+        flux_supervision = getattr(dataset, "flux_supervision", None)
+        if self.flux_loss_weight <= 0.0 or flux_supervision is None:
+            return velocity_loss
+
+        pred_fluxes, target_fluxes = self._compute_flux_predictions(
+            model, flux_supervision
+        )
+        if pred_fluxes is None or target_fluxes is None:
+            return velocity_loss
+
+        flux_loss = torch.mean(torch.square(pred_fluxes - target_fluxes))
+        return velocity_loss + self.flux_loss_weight * flux_loss
 
     def get_loss_weight_overrides(self) -> dict[str, float]:
         return {
@@ -506,7 +719,11 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             np.vstack(coordinate_batches), dtype=torch.float32
         )
         dataset_targets = torch.tensor(np.vstack(target_batches), dtype=torch.float32)
-        return TensorDataset(dataset_coordinates, dataset_targets)
+        dataset = TensorDataset(dataset_coordinates, dataset_targets)
+        flux_supervision = self._build_flux_supervision(result)
+        if flux_supervision is not None:
+            dataset.flux_supervision = flux_supervision
+        return dataset
 
     def pde_residual(
         self,
@@ -688,6 +905,30 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
             )
             inlet_v_rmse = float(torch.sqrt(torch.mean(inlet_v.square())).cpu())
 
+            flux_rmse = None
+            flux_metrics = []
+            pred_fluxes, target_fluxes = self._compute_flux_predictions(
+                model, getattr(dataset, "flux_supervision", None)
+            )
+            if pred_fluxes is not None and target_fluxes is not None:
+                flux_rmse = float(
+                    torch.sqrt(torch.mean((pred_fluxes - target_fluxes).square())).cpu()
+                )
+                flux_supervision = getattr(dataset, "flux_supervision", {})
+                section_labels = list(flux_supervision.get("section_labels", []))
+                section_times = list(flux_supervision.get("section_times", []))
+                section_positions = list(flux_supervision.get("section_positions", []))
+                for idx in range(len(section_labels)):
+                    flux_metrics.append(
+                        {
+                            "label": str(section_labels[idx]),
+                            "time": float(section_times[idx]),
+                            "x": float(section_positions[idx]),
+                            "predicted_flux": float(pred_fluxes[idx].cpu()),
+                            "target_flux": float(target_fluxes[idx].cpu()),
+                        }
+                    )
+
         mesh_vertex_coords = torch.tensor(
             [(float(v.point[0]), float(v.point[1])) for v in mesh.vertices],
             dtype=torch.float32,
@@ -722,8 +963,10 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
                     torch.mean((pred_u - target_u).square() + (pred_v - target_v).square())
                 ).cpu()
             ),
+            "overall_flux_rmse": flux_rmse,
             "inlet_u_rmse_t_end": inlet_u_rmse,
             "inlet_v_rmse_t_end": inlet_v_rmse,
             "time_slice_metrics": time_slice_metrics,
+            "flux_metrics": flux_metrics,
             "predicted_velocity_snapshots": snapshot_data,
         }
