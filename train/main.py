@@ -502,6 +502,24 @@ def run_pinn_smoke(
     final_data_loss = float(model.loss_data_on_dataset(dataset).detach().cpu())
     final_interior_loss = float(model.loss_interior().detach().cpu())
     final_bc_loss = float(model.loss_boundary_condition().detach().cpu())
+    diagnostics = None
+    snapshot_paths = []
+    if hasattr(problem, "evaluate_smoke_diagnostics"):
+        diagnostics = problem.evaluate_smoke_diagnostics(model, dataset, mesh)
+        for snapshot in diagnostics.get("predicted_velocity_snapshots", []):
+            time_tag = f"{snapshot['time']:.2f}".replace(".", "p")
+            vel_path = _save_scalar_snapshot_plot(
+                mesh,
+                snapshot["velocity_magnitude"],
+                f"Predicted velocity magnitude at t={snapshot['time']:.2f}",
+                f"predicted_velocity_magnitude_t{time_tag}.png",
+            )
+            snapshot_paths.append(
+                {
+                    "time": snapshot["time"],
+                    "velocity_magnitude_plot": vel_path,
+                }
+            )
 
     write_run_metadata(
         extra={
@@ -521,6 +539,8 @@ def run_pinn_smoke(
             "final_data_loss": final_data_loss,
             "final_interior_loss": final_interior_loss,
             "final_bc_loss": final_bc_loss,
+            "diagnostics": diagnostics,
+            "snapshot_plots": snapshot_paths,
         }
     )
 
@@ -531,6 +551,22 @@ def run_pinn_smoke(
         f"interior={final_interior_loss:.6e}, "
         f"bc={final_bc_loss:.6e}"
     )
+    if diagnostics is not None:
+        print(
+            "Diagnostics: "
+            f"mean_speed(pred={diagnostics['overall_mean_pred_speed']:.6e}, "
+            f"target={diagnostics['overall_mean_target_speed']:.6e}), "
+            f"velocity_rmse={diagnostics['overall_velocity_rmse']:.6e}, "
+            f"inlet_u_rmse(t_end)={diagnostics['inlet_u_rmse_t_end']:.6e}, "
+            f"inlet_v_rmse(t_end)={diagnostics['inlet_v_rmse_t_end']:.6e}"
+        )
+        for item in diagnostics.get("time_slice_metrics", []):
+            print(
+                f"  t={item['time']:.2f}: "
+                f"mean_pred_speed={item['mean_pred_speed']:.6e}, "
+                f"mean_target_speed={item['mean_target_speed']:.6e}, "
+                f"velocity_rmse={item['velocity_rmse']:.6e}"
+            )
     return run_id
 
 

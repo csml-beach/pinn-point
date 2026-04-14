@@ -590,3 +590,111 @@ class NavierStokesChannelObstacleProblem(PDEProblem):
 
     def get_time_bounds(self) -> Tuple[float, float]:
         return (0.0, self.t_end)
+
+    def evaluate_smoke_diagnostics(
+        self,
+        model: Any,
+        dataset: TensorDataset,
+        mesh,
+        *,
+        inlet_probe_count: int = 128,
+    ) -> Dict[str, Any]:
+        """Evaluate simple anti-collapse diagnostics for PINN smoke runs."""
+        device = next(model.parameters()).device
+        coords, targets = dataset.tensors
+        coords = torch.as_tensor(coords, dtype=torch.float32, device=device)
+        targets = torch.as_tensor(targets, dtype=torch.float32, device=device)
+
+        with torch.no_grad():
+            predictions = model.forward(coords)
+            pred_u = predictions[:, 0]
+            pred_v = predictions[:, 1]
+            target_u = targets[:, 0]
+            target_v = targets[:, 1]
+
+            pred_speed = torch.sqrt(pred_u.square() + pred_v.square())
+            target_speed = torch.sqrt(target_u.square() + target_v.square())
+
+            unique_times = torch.unique(coords[:, 2].detach().cpu(), sorted=True)
+            time_slice_metrics = []
+            for time_value in unique_times.tolist():
+                mask = torch.isclose(
+                    coords[:, 2],
+                    torch.tensor(time_value, dtype=coords.dtype, device=device),
+                    atol=1e-6,
+                    rtol=0.0,
+                )
+                if not bool(mask.any()):
+                    continue
+                time_slice_metrics.append(
+                    {
+                        "time": float(time_value),
+                        "mean_pred_speed": float(pred_speed[mask].mean().cpu()),
+                        "mean_target_speed": float(target_speed[mask].mean().cpu()),
+                        "velocity_rmse": float(
+                            torch.sqrt(
+                                torch.mean(
+                                    (pred_u[mask] - target_u[mask]).square()
+                                    + (pred_v[mask] - target_v[mask]).square()
+                                )
+                            ).cpu()
+                        ),
+                    }
+                )
+
+            inlet_y = torch.linspace(0.0, self.height, inlet_probe_count, device=device)
+            inlet_x = torch.zeros(inlet_probe_count, dtype=torch.float32, device=device)
+            inlet_t = torch.full(
+                (inlet_probe_count,),
+                float(self.t_end),
+                dtype=torch.float32,
+                device=device,
+            )
+            inlet_prediction = model.forward(inlet_x, inlet_y, inlet_t)
+            inlet_u, inlet_v, _ = self._split_prediction(inlet_prediction)
+            inlet_target_u = self._inflow_profile_torch(inlet_y)
+
+            inlet_u_rmse = float(
+                torch.sqrt(torch.mean((inlet_u - inlet_target_u).square())).cpu()
+            )
+            inlet_v_rmse = float(torch.sqrt(torch.mean(inlet_v.square())).cpu())
+
+        mesh_vertex_coords = torch.tensor(
+            [(float(v.point[0]), float(v.point[1])) for v in mesh.vertices],
+            dtype=torch.float32,
+            device=device,
+        )
+        unique_times_list = [item["time"] for item in time_slice_metrics]
+        snapshot_data = []
+        with torch.no_grad():
+            for time_value in unique_times_list:
+                time_column = torch.full(
+                    (len(mesh_vertex_coords), 1),
+                    float(time_value),
+                    dtype=torch.float32,
+                    device=device,
+                )
+                prediction = model.forward(torch.cat((mesh_vertex_coords, time_column), dim=1))
+                u_pred = prediction[:, 0]
+                v_pred = prediction[:, 1]
+                vel_mag = torch.sqrt(u_pred.square() + v_pred.square()).cpu().numpy()
+                snapshot_data.append(
+                    {
+                        "time": float(time_value),
+                        "velocity_magnitude": vel_mag.tolist(),
+                    }
+                )
+
+        return {
+            "overall_mean_pred_speed": float(pred_speed.mean().cpu()),
+            "overall_mean_target_speed": float(target_speed.mean().cpu()),
+            "overall_velocity_rmse": float(
+                torch.sqrt(
+                    torch.mean((pred_u - target_u).square() + (pred_v - target_v).square())
+                ).cpu()
+            ),
+            "inlet_u_rmse_t_end": inlet_u_rmse,
+            "inlet_v_rmse_t_end": inlet_v_rmse,
+            "time_slice_metrics": time_slice_metrics,
+            "predicted_velocity_snapshots": snapshot_data,
+        }
