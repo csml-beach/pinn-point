@@ -14,13 +14,14 @@ from config import DEVICE, MODEL_CONFIG
 class FeedForward(nn.Module):
     """Physics-Informed Neural Network for solving PDEs with adaptive mesh refinement."""
 
-    def __init__(self, mesh_x, mesh_y, problem):
+    def __init__(self, mesh_x, mesh_y, problem, mesh_t=None):
         """Initialize the PINN model.
 
         Args:
             mesh_x: x-coordinates of mesh points
             mesh_y: y-coordinates of mesh points
             problem: PDEProblem driving residual and boundary losses
+            mesh_t: Optional time coordinates for transient problems
         """
         super(FeedForward, self).__init__()
 
@@ -51,6 +52,9 @@ class FeedForward(nn.Module):
         self.optimizer = None
         self.fes = None  # Will be set during training
         self.problem = problem
+        self.input_dim = int(getattr(problem, "input_dim", 2))
+        self.output_dim = int(getattr(problem, "output_dim", 1))
+        self.has_time_input = bool(getattr(problem, "has_time_input", False))
 
         # Loss function weights
         self.w_data = MODEL_CONFIG["w_data"]
@@ -62,10 +66,10 @@ class FeedForward(nn.Module):
         self.num_data = MODEL_CONFIG["num_data"]
         self.num_bd = MODEL_CONFIG["num_bd"]
 
-        # Neural network layers (2 input features -> hidden -> hidden -> 1 output)
-        self.b1 = nn.Linear(2, self.hidden_size)
+        # Neural network layers (problem-defined input/output dimensions).
+        self.b1 = nn.Linear(self.input_dim, self.hidden_size)
         self.b2 = nn.Linear(self.hidden_size, self.hidden_size)
-        self.b3 = nn.Linear(self.hidden_size, 1)
+        self.b3 = nn.Linear(self.hidden_size, self.output_dim)
 
         # Initialize weights using Xavier initialization
         nn.init.xavier_uniform_(self.b1.weight)
@@ -75,17 +79,40 @@ class FeedForward(nn.Module):
         # Store mesh coordinates as buffers so model.to(DEVICE) moves them too.
         self.register_buffer("mesh_x", torch.empty(0, dtype=torch.float32))
         self.register_buffer("mesh_y", torch.empty(0, dtype=torch.float32))
-        self.set_mesh_points(mesh_x, mesh_y)
+        self.register_buffer("mesh_t", torch.empty(0, dtype=torch.float32))
+        self.set_mesh_points(mesh_x, mesh_y, mesh_t=mesh_t)
 
         # Cache the training dataset on the active device once per model.
         self._cached_dataset_id = None
         self._cached_dataset_xy = None
         self._cached_dataset_u = None
 
-    def set_mesh_points(self, mesh_x, mesh_y):
+    def _default_time_coordinates(self, count, device=None):
+        """Generate time coordinates for transient collocation points."""
+        device = device or DEVICE
+        bounds = None
+        if self.problem is not None and hasattr(self.problem, "get_time_bounds"):
+            bounds = self.problem.get_time_bounds()
+        if not bounds:
+            return torch.zeros(int(count), dtype=torch.float32, device=device)
+
+        t_min, t_max = bounds
+        if t_max <= t_min:
+            return torch.full((int(count),), float(t_min), dtype=torch.float32, device=device)
+
+        return t_min + (t_max - t_min) * torch.rand(int(count), dtype=torch.float32, device=device)
+
+    def set_mesh_points(self, mesh_x, mesh_y, mesh_t=None):
         """Update collocation points on the configured runtime device."""
         self.mesh_x = torch.as_tensor(mesh_x, dtype=torch.float32, device=DEVICE)
         self.mesh_y = torch.as_tensor(mesh_y, dtype=torch.float32, device=DEVICE)
+        if self.has_time_input:
+            if mesh_t is None:
+                self.mesh_t = self._default_time_coordinates(len(self.mesh_x), device=DEVICE)
+            else:
+                self.mesh_t = torch.as_tensor(mesh_t, dtype=torch.float32, device=DEVICE)
+        else:
+            self.mesh_t = torch.empty(0, dtype=torch.float32, device=DEVICE)
 
     def _get_cached_dataset_tensors(self, dataset):
         """Move the static supervised dataset to the active device once."""
@@ -105,21 +132,44 @@ class FeedForward(nn.Module):
 
         return self._cached_dataset_xy, self._cached_dataset_u
 
-    def forward(self, x, y):
+    def _forward_from_coords(self, coords):
+        """Internal forward pass from an (N, input_dim) coordinate tensor."""
+        h1 = torch.tanh(self.b1(coords))
+        h2 = torch.tanh(self.b2(h1))
+        return self.b3(h2)
+
+    def forward(self, *coords):
         """Forward pass through the neural network.
 
         Args:
-            x: x-coordinates
-            y: y-coordinates
+            *coords: Separate coordinate tensors or a single (N, input_dim) tensor
 
         Returns:
-            Neural network output u(x,y)
+            Neural network output(s)
         """
-        xy = torch.stack((x, y), dim=1)
-        h1 = torch.tanh(self.b1(xy))
-        h2 = torch.tanh(self.b2(h1))
-        u = self.b3(h2)
-        return u
+        if len(coords) == 1:
+            coord_tensor = torch.as_tensor(
+                coords[0], dtype=torch.float32, device=DEVICE
+            )
+            if coord_tensor.ndim == 1:
+                coord_tensor = coord_tensor.reshape(-1, self.input_dim)
+            if coord_tensor.ndim != 2 or coord_tensor.shape[1] != self.input_dim:
+                raise ValueError(
+                    f"Expected a coordinate tensor of shape (N, {self.input_dim})"
+                )
+            return self._forward_from_coords(coord_tensor)
+
+        if len(coords) != self.input_dim:
+            raise ValueError(
+                f"Expected {self.input_dim} coordinate tensors, received {len(coords)}"
+            )
+
+        prepared = [
+            torch.as_tensor(coord, dtype=torch.float32, device=DEVICE).reshape(-1)
+            for coord in coords
+        ]
+        coord_tensor = torch.stack(prepared, dim=1)
+        return self._forward_from_coords(coord_tensor)
 
     def compute_derivative(self, u, x, n):
         """Compute the n-th order derivative of u with respect to x using automatic differentiation.
@@ -145,7 +195,7 @@ class FeedForward(nn.Module):
             )[0]
             return self.compute_derivative(du_dx, x, n - 1)
 
-    def PDE_residual(self, x, y, use_meshgrid=False):
+    def PDE_residual(self, x, y, t=None, use_meshgrid=False):
         """Compute the PDE residual for the Poisson equation: ∇²u + f = 0.
 
         NOTE: This is the default Poisson problem implementation.
@@ -157,6 +207,7 @@ class FeedForward(nn.Module):
         Args:
             x: x-coordinates
             y: y-coordinates
+            t: Optional time coordinates for transient problems
             use_meshgrid: Whether to use meshgrid for coordinates
 
         Returns:
@@ -166,9 +217,16 @@ class FeedForward(nn.Module):
             raise RuntimeError("FeedForward model requires an attached PDE problem")
 
         if use_meshgrid:
+            if self.has_time_input:
+                raise ValueError("use_meshgrid is only supported for 2D spatial problems")
             x, y = torch.meshgrid(x, y, indexing="ij")
             x = x.flatten()
             y = y.flatten()
+
+        if self.has_time_input:
+            if t is None:
+                t = self._default_time_coordinates(len(x), device=torch.as_tensor(x, device=DEVICE).device)
+            return self.problem.pde_residual(self, x, y, t)
 
         return self.problem.pde_residual(self, x, y)
 
@@ -187,18 +245,12 @@ class FeedForward(nn.Module):
         xy = xy_all[idx]
         u = u_all[idx]
 
-        x, y = xy.unbind(dim=1)
-
-        u_pred = self.forward(x, y)
-        loss_data = torch.mean(torch.square(u - u_pred))
-        return loss_data
+        return self.problem.data_loss(self, xy, u)
 
     def loss_data_on_dataset(self, dataset):
         """Compute supervised loss on the full provided dataset without resampling."""
         xy, u = self._get_cached_dataset_tensors(dataset)
-        x, y = xy.unbind(dim=1)
-        u_pred = self.forward(x, y)
-        return torch.mean(torch.square(u - u_pred))
+        return self.problem.data_loss(self, xy, u)
 
     def loss_interior(self):
         """Compute interior loss based on PDE residual.
@@ -206,15 +258,25 @@ class FeedForward(nn.Module):
         Returns:
             Interior loss value
         """
-        res = self.PDE_residual(self.mesh_x, self.mesh_y)
+        if self.has_time_input:
+            res = self.PDE_residual(self.mesh_x, self.mesh_y, self.mesh_t)
+        else:
+            res = self.PDE_residual(self.mesh_x, self.mesh_y)
         loss_residual = torch.mean(torch.square(res))
         return loss_residual
 
-    def loss_interior_on_points(self, x_points, y_points):
+    def loss_interior_on_points(self, *coords):
         """Compute residual loss on an explicit validation point set."""
-        x_points = torch.as_tensor(x_points, dtype=torch.float32, device=DEVICE)
-        y_points = torch.as_tensor(y_points, dtype=torch.float32, device=DEVICE)
-        res = self.PDE_residual(x_points, y_points)
+        if len(coords) not in (2, 3):
+            raise ValueError("loss_interior_on_points expects (x, y) or (x, y, t)")
+
+        prepared = [
+            torch.as_tensor(coord, dtype=torch.float32, device=DEVICE) for coord in coords
+        ]
+        if len(prepared) == 3:
+            res = self.PDE_residual(prepared[0], prepared[1], prepared[2])
+        else:
+            res = self.PDE_residual(prepared[0], prepared[1])
         return torch.mean(torch.square(res))
 
     def loss_boundary_condition(self):

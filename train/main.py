@@ -29,7 +29,12 @@ def _bootstrap_runtime_from_cli(argv):
         i += 1
 
     mode = remaining[1].lower() if len(remaining) > 1 else None
-    if device is None and "PINN_DEVICE" not in os.environ and mode == "smoke":
+    if device is None and "PINN_DEVICE" not in os.environ and mode in {
+        "smoke",
+        "geom-smoke",
+        "fem-smoke",
+        "pinn-smoke",
+    }:
         device = "cpu"
 
     if device is not None:
@@ -49,6 +54,10 @@ from paths import generate_run_id, set_active_run, write_run_metadata, OUTPUTS_R
 from visualization import plot_ablation_error_shaded
 from problems import get_problem, list_problems
 from paths import comparison_images_dir
+from fem_solver import create_dataset, export_fem_solution, solve_FEM
+from geometry import export_vertex_coordinates
+from pinn_model import FeedForward
+from training import train_model
 
 
 SMOKE_DEFAULT_METHODS = ["adaptive", "random"]
@@ -187,6 +196,67 @@ def _parse_fem_smoke_args(args):
 
     if ignored:
         print(f"Warning: ignoring unsupported fem-smoke arguments: {' '.join(ignored)}")
+    return options
+
+
+def _parse_pinn_smoke_args(args):
+    options = {
+        "problem_name": "navier_stokes_channel_obstacle",
+        "problem_kwargs": None,
+        "mesh_size": 0.35,
+        "epochs": 25,
+        "learning_rate": None,
+        "seed": None,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--problem-kwargs" and i + 1 < len(args):
+            try:
+                options["problem_kwargs"] = json.loads(args[i + 1])
+            except Exception as e:
+                print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid mesh size '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--epochs" and i + 1 < len(args):
+            try:
+                options["epochs"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid epochs '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed '{args[i + 1]}', ignoring")
+            i += 2
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported pinn-smoke arguments: {' '.join(ignored)}")
     return options
 
 
@@ -361,6 +431,106 @@ def run_fem_smoke(
             f"  t={item['time']:.2f}: "
             f"{item['velocity_magnitude_plot']} | {item['pressure_plot']}"
         )
+    return run_id
+
+
+def run_pinn_smoke(
+    problem_name="navier_stokes_channel_obstacle",
+    problem_kwargs=None,
+    mesh_size=0.35,
+    epochs=25,
+    learning_rate=None,
+    seed=None,
+):
+    if seed is None:
+        seed = _resolve_seed()
+    seed = int(seed)
+    set_global_seed(seed)
+
+    tag = f"pinn-smoke-{problem_name}"
+    run_id = generate_run_id(tag)
+    set_active_run(run_id)
+
+    print("Running PINN smoke...")
+    print(f"PINN smoke run ID: {run_id}")
+    print(f"Outputs root: {os.path.join(OUTPUTS_ROOT, run_id)}")
+    print(f"Problem: {problem_name}")
+    print(f"Mesh size: {mesh_size}")
+    print(f"Epochs: {epochs}")
+    print(f"Device: {DEVICE}")
+
+    problem = get_problem(problem_name, **dict(problem_kwargs or {}))
+    mesh = problem.create_mesh(maxh=mesh_size)
+
+    dataset = problem.create_training_dataset(mesh, seed=seed)
+    if dataset is None:
+        gfu, _ = solve_FEM(mesh, problem=problem)
+        vertex_array = export_vertex_coordinates(mesh)
+        solution_array = export_fem_solution(mesh, gfu, problem=problem)
+        dataset = create_dataset(vertex_array, solution_array)
+
+    coords, targets = dataset.tensors
+    spatial_vertices = export_vertex_coordinates(mesh)
+    mesh_x, mesh_y = spatial_vertices.T
+    model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+
+    if learning_rate is None:
+        learning_rate = float(TRAINING_CONFIG["lr"])
+
+    initial_data_loss = float(model.loss_data_on_dataset(dataset).detach().cpu())
+    initial_interior_loss = float(model.loss_interior().detach().cpu())
+    initial_bc_loss = float(model.loss_boundary_condition().detach().cpu())
+
+    print(
+        "Initial losses: "
+        f"data={initial_data_loss:.6e}, "
+        f"interior={initial_interior_loss:.6e}, "
+        f"bc={initial_bc_loss:.6e}"
+    )
+
+    train_model(
+        model,
+        dataset,
+        epochs=epochs,
+        optimizer=TRAINING_CONFIG["optimizer"],
+        lr=learning_rate,
+        validation_dataset=None,
+        validation_residual_points=None,
+        restore_best_epoch_checkpoint=False,
+    )
+
+    final_data_loss = float(model.loss_data_on_dataset(dataset).detach().cpu())
+    final_interior_loss = float(model.loss_interior().detach().cpu())
+    final_bc_loss = float(model.loss_boundary_condition().detach().cpu())
+
+    write_run_metadata(
+        extra={
+            "mode": "pinn-smoke",
+            "problem_name": problem_name,
+            "mesh_size": mesh_size,
+            "epochs": int(epochs),
+            "learning_rate": float(learning_rate),
+            "seed": seed,
+            "dataset_size": len(dataset),
+            "dataset_coordinate_dim": int(coords.shape[1]),
+            "dataset_target_dim": int(targets.shape[1]) if targets.ndim == 2 else 1,
+            "collocation_point_count": int(len(model.mesh_x)),
+            "initial_data_loss": initial_data_loss,
+            "initial_interior_loss": initial_interior_loss,
+            "initial_bc_loss": initial_bc_loss,
+            "final_data_loss": final_data_loss,
+            "final_interior_loss": final_interior_loss,
+            "final_bc_loss": final_bc_loss,
+        }
+    )
+
+    print("PINN smoke completed.")
+    print(
+        "Final losses: "
+        f"data={final_data_loss:.6e}, "
+        f"interior={final_interior_loss:.6e}, "
+        f"bc={final_bc_loss:.6e}"
+    )
     return run_id
 
 
@@ -1222,6 +1392,12 @@ if __name__ == "__main__":
             if seed_override is not None:
                 fem_options["seed"] = seed_override
             success = run_fem_smoke(**fem_options)
+        elif mode == "pinn-smoke":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            pinn_options = _parse_pinn_smoke_args(remaining)
+            if seed_override is not None:
+                pinn_options["seed"] = seed_override
+            success = run_pinn_smoke(**pinn_options)
         elif mode == "hparams":
             # Optional: allow a JSON grid file or inline JSON after the mode, and --images flag
             import json
@@ -1349,6 +1525,13 @@ if __name__ == "__main__":
             print("               --mesh-size <f>     Mesh size for FEM smoke")
             print("               --dt <f>            Time step for transient FEM smoke")
             print("               --t-end <f>         Final time for transient FEM smoke")
+            print("               --seed <int>        Optional seed")
+            print("  pinn-smoke   Run a lightweight training smoke on a problem-owned PINN")
+            print("               --problem <name>    Problem name")
+            print("               --problem-kwargs '{...}'  Inline JSON kwargs")
+            print("               --mesh-size <f>     Mesh size for PINN smoke")
+            print("               --epochs <int>      Number of training epochs")
+            print("               --lr <f>            Learning rate override")
             print("               --seed <int>        Optional seed")
             print("  hparams      Run hyperparameter study")
             print("               [grid.json]    Path to JSON grid file")

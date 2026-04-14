@@ -51,6 +51,7 @@ def build_model_checkpoint(model, additional_info=None):
         "model_state_dict": model.state_dict(),
         "mesh_x": tensor_to_numpy_safe(model.mesh_x),
         "mesh_y": tensor_to_numpy_safe(model.mesh_y),
+        "mesh_t": tensor_to_numpy_safe(getattr(model, "mesh_t", torch.empty(0))),
         "total_error_history": model.total_error_history,
         "relative_l2_error_history": getattr(model, "relative_l2_error_history", []),
         "total_error_rms_history": getattr(model, "total_error_rms_history", []),
@@ -100,7 +101,11 @@ def restore_model_state_from_checkpoint(model, checkpoint):
     """Restore model weights and active collocation points without touching histories."""
     model.load_state_dict(checkpoint["model_state_dict"])
     if hasattr(model, "set_mesh_points"):
-        model.set_mesh_points(checkpoint["mesh_x"], checkpoint["mesh_y"])
+        model.set_mesh_points(
+            checkpoint["mesh_x"],
+            checkpoint["mesh_y"],
+            mesh_t=checkpoint.get("mesh_t"),
+        )
     else:
         model.mesh_x = torch.tensor(
             checkpoint["mesh_x"], dtype=torch.float32, device=DEVICE
@@ -227,7 +232,7 @@ def print_model_summary(model):
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print(
-        f"Architecture: {model.b1.in_features} -> {model.hidden_size} -> {model.hidden_size} -> 1"
+        f"Architecture: {model.b1.in_features} -> {model.hidden_size} -> {model.hidden_size} -> {model.b3.out_features}"
     )
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")

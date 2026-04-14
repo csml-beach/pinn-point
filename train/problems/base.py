@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple
 
 import torch
+from torch.utils.data import TensorDataset
 
 
 class PDEProblem(ABC):
@@ -27,10 +28,14 @@ class PDEProblem(ABC):
 
     name: str = "base"
     description: str = "Abstract base PDE problem"
+    input_dim: int = 2
+    output_dim: int = 1
+    output_names: tuple[str, ...] = ("u",)
+    has_time_input: bool = False
 
     @abstractmethod
     def pde_residual(
-        self, model: Any, x: torch.Tensor, y: torch.Tensor
+        self, model: Any, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Compute the PDE residual at given points.
 
@@ -38,9 +43,10 @@ class PDEProblem(ABC):
         For a PDE of the form L[u] = f, the residual is L[u] - f.
 
         Args:
-            model: Neural network model with forward(x, y) method
+            model: Neural network model with forward(...) method
             x: x-coordinates (requires_grad=True for autograd)
             y: y-coordinates (requires_grad=True for autograd)
+            t: Optional time coordinates for transient problems
 
         Returns:
             Tensor of residual values at each point
@@ -61,12 +67,15 @@ class PDEProblem(ABC):
         pass
 
     @abstractmethod
-    def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def source_term(
+        self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Evaluate the source term f(x, y) at given points.
 
         Args:
             x: x-coordinates
             y: y-coordinates
+            t: Optional time coordinates for transient problems
 
         Returns:
             Source term values at each point
@@ -111,6 +120,35 @@ class PDEProblem(ABC):
         from geometry import create_initial_mesh
 
         return create_initial_mesh(maxh=maxh)
+
+    def get_time_bounds(self) -> Tuple[float, float] | None:
+        """Return temporal bounds for transient problems, else None."""
+        return None
+
+    def data_loss(
+        self, model: Any, coordinates: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute supervised loss on problem-owned targets.
+
+        Default behavior is full-output MSE against the provided targets.
+        Problems can override this when only part of the state is supervised.
+        """
+        predictions = model.forward(coordinates)
+        targets = torch.as_tensor(
+            targets,
+            dtype=predictions.dtype,
+            device=predictions.device,
+        )
+        return torch.mean(torch.square(predictions - targets))
+
+    def create_training_dataset(
+        self, mesh, fem_solution: Any | None = None, seed: int | None = None
+    ) -> TensorDataset | None:
+        """Optionally build a problem-specific supervised dataset.
+
+        Returning None falls back to the legacy static scalar dataset path.
+        """
+        return None
 
     def export_fem_solution(self, mesh, gfu) -> torch.Tensor:
         """Evaluate a FEM solution at mesh vertices.

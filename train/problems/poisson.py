@@ -59,7 +59,7 @@ class PoissonProblem(PDEProblem):
         return source
 
     def pde_residual(
-        self, model: Any, x: torch.Tensor, y: torch.Tensor
+        self, model: Any, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Compute PDE residual: ∇²u + f = 0.
 
@@ -119,7 +119,9 @@ class PoissonProblem(PDEProblem):
 
         return loss_bc
 
-    def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def source_term(
+        self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Evaluate the localized source term f(x,y).
 
         Args:

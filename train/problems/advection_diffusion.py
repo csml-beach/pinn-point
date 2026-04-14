@@ -89,7 +89,7 @@ class AdvectionDiffusionProblem(PDEProblem):
         return profile
 
     def pde_residual(
-        self, model: Any, x: torch.Tensor, y: torch.Tensor
+        self, model: Any, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Compute residual of -eps*Δu + b·∇u + c*u - f = 0."""
         from config import DEVICE
@@ -145,7 +145,9 @@ class AdvectionDiffusionProblem(PDEProblem):
         loss_top = torch.mean(torch.square(u_top))
         return 0.25 * (loss_left + loss_right + loss_bottom + loss_top)
 
-    def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def source_term(
+        self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
+    ) -> torch.Tensor:
         x = torch.as_tensor(x, dtype=torch.float32)
         y = torch.as_tensor(y, dtype=torch.float32)
         return self._source_term_torch(x, y)

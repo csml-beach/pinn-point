@@ -27,8 +27,7 @@ def evaluate_validation_score(
             data_loss = torch.tensor(0.0, device=next(model.parameters()).device)
 
         if validation_residual_points is not None:
-            val_x, val_y = validation_residual_points
-            residual_loss = model.loss_interior_on_points(val_x, val_y)
+            residual_loss = model.loss_interior_on_points(*validation_residual_points)
         else:
             residual_loss = torch.tensor(0.0, device=next(model.parameters()).device)
 
