@@ -4,24 +4,23 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_ns_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--problem-kwargs JSON]
+  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X]
 
 Description:
-  Submit a 10-seed Navier-Stokes screen confirm study on m3-large-cpu for
-  adaptive_persistent, adaptive, random, halton, and rad.
+  Submit an advection-diffusion five-method screen confirm study on m3-large-cpu
+  for adaptive_persistent, adaptive, random, halton, and rad.
 EOF
 }
 
-parallel_jobs=4
-threads_per_job=4
-epochs=200
-iterations=6
-seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066"
+parallel_jobs=10
+threads_per_job=1
+epochs=300
+iterations=8
 commit_sha="$(git rev-parse origin/codex/navier-stokes-channel-obstacle)"
 config_file=""
 sync_root=""
 reference_mesh_factor="0.05"
-problem_kwargs='{}'
+seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066,7077,8088,9099,11111,12121,13131,14141,15151,16161,17171"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -61,10 +60,6 @@ while [[ $# -gt 0 ]]; do
       reference_mesh_factor="$2"
       shift 2
       ;;
-    --problem-kwargs)
-      problem_kwargs="$2"
-      shift 2
-      ;;
     -h|--help)
       usage
       exit 0
@@ -83,7 +78,7 @@ if [[ -z "$config_file" ]]; then
   config_file="$remote_ops_dir/config.m3-large-cpu.env"
 fi
 if [[ -z "$sync_root" ]]; then
-  sync_root="$repo_root/outputs/m3-large-cpu-navier-stokes-screen-confirm"
+  sync_root="$repo_root/outputs/m3-large-cpu-advection-diffusion-screen-confirm-${epochs}e"
 fi
 
 if [[ ! -f "$config_file" ]]; then
@@ -99,7 +94,7 @@ export CONFIG_FILE="$config_file"
 # shellcheck disable=SC1090
 source "$remote_ops_dir/lib.sh"
 
-runner_dir="/tmp/pinn_point_m3_ns_screen_confirm_runners"
+runner_dir="/tmp/pinn_point_m3_advection_screen_confirm_runners"
 manifest_dir="$sync_root/_manifests"
 mkdir -p "$runner_dir" "$manifest_dir" "$sync_root"
 
@@ -122,7 +117,7 @@ remote_exec "
   mkdir -p '$REMOTE_REPO_PATH/.remote_opps/logs'
 "
 
-echo "[submit] syncing local Navier-Stokes overlay"
+echo "[submit] syncing local advection overlay"
 remote_copy_to "$repo_root/train/config.py" "$REMOTE_REPO_PATH/train/config.py"
 remote_copy_to "$repo_root/train/experiments.py" "$REMOTE_REPO_PATH/train/experiments.py"
 remote_copy_to "$repo_root/train/main.py" "$REMOTE_REPO_PATH/train/main.py"
@@ -141,20 +136,11 @@ remote_copy_to "$repo_root/train/methods/random.py" "$REMOTE_REPO_PATH/train/met
 remote_copy_to "$repo_root/train/methods/sampling.py" "$REMOTE_REPO_PATH/train/methods/sampling.py"
 remote_copy_to "$repo_root/train/problems/__init__.py" "$REMOTE_REPO_PATH/train/problems/__init__.py"
 remote_copy_to "$repo_root/train/problems/base.py" "$REMOTE_REPO_PATH/train/problems/base.py"
-remote_copy_to "$repo_root/train/problems/navier_stokes_channel_obstacle.py" "$REMOTE_REPO_PATH/train/problems/navier_stokes_channel_obstacle.py"
-if [[ -f "$repo_root/train/problems/allen_cahn_obstacles_2d.py" ]]; then
-  remote_copy_to "$repo_root/train/problems/allen_cahn_obstacles_2d.py" "$REMOTE_REPO_PATH/train/problems/allen_cahn_obstacles_2d.py"
-fi
-if [[ -f "$repo_root/train/problems/poisson_ring.py" ]]; then
-  remote_copy_to "$repo_root/train/problems/poisson_ring.py" "$REMOTE_REPO_PATH/train/problems/poisson_ring.py"
-fi
-if [[ -f "$repo_root/train/problems/poisson_ring_hard.py" ]]; then
-  remote_copy_to "$repo_root/train/problems/poisson_ring_hard.py" "$REMOTE_REPO_PATH/train/problems/poisson_ring_hard.py"
-fi
+remote_copy_to "$repo_root/train/problems/advection_diffusion.py" "$REMOTE_REPO_PATH/train/problems/advection_diffusion.py"
 
 submit_seed() {
   local seed="$1"
-  local session="cpu-ns-screen-seed${seed}"
+  local session="cpu-advection-screen-seed${seed}"
   local remote_log="$REMOTE_REPO_PATH/.remote_opps/logs/${session}.log"
   local remote_runner="$REMOTE_REPO_PATH/.remote_opps/run_${session}.sh"
   local local_runner="$runner_dir/${session}.sh"
@@ -177,17 +163,19 @@ export NUMEXPR_NUM_THREADS=$threads_per_job
 export VECLIB_MAXIMUM_THREADS=$threads_per_job
 export NGS_NUM_THREADS=$threads_per_job
 
+VALIDATION_OPTIONS='{"restore_best_epoch_checkpoint": false}'
+
 set +e
 ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --device cpu \\
   screen \\
-  --problem navier_stokes_channel_obstacle \\
+  --problem advection_diffusion \\
   --methods adaptive_persistent,adaptive,random,halton,rad \\
   --seed $seed \\
   --iterations $iterations \\
   --epochs $epochs \\
   --reference-mesh-factor $reference_mesh_factor \\
-  --problem-kwargs '$problem_kwargs'
+  --validation-options "\$VALIDATION_OPTIONS"
 rc=\$?
 set -e
 
