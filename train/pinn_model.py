@@ -274,6 +274,8 @@ class FeedForward(nn.Module):
 
     def loss_interior_on_points(self, *coords):
         """Compute residual loss on an explicit validation point set."""
+        coords = tuple(coord for coord in coords if coord is not None)
+
         if len(coords) not in (2, 3):
             raise ValueError("loss_interior_on_points expects (x, y) or (x, y, t)")
 

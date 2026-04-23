@@ -171,6 +171,19 @@ class PDEProblem(ABC):
         """
         return None
 
+    def get_collocation_budget(
+        self,
+        initial_mesh,
+        vertex_array: torch.Tensor,
+        training_dataset: TensorDataset | None = None,
+    ) -> int | None:
+        """Optionally override the fixed accepted collocation budget.
+
+        Returning None falls back to the legacy behavior of using the initial
+        mesh vertex count as the collocation budget.
+        """
+        return None
+
     def create_smoke_collocation_points(
         self, mesh, seed: int | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None] | None:
@@ -182,6 +195,20 @@ class PDEProblem(ABC):
 
     def create_reference_solution(self, mesh_size_factor: float = 0.05):
         """Optionally build a problem-specific reference solution payload."""
+        return None
+
+    def build_geometry_smoke_metadata(self, mesh) -> dict[str, Any] | None:
+        """Optionally provide problem-specific geometry-smoke artifacts/metadata."""
+        return None
+
+    def build_fem_smoke_metadata(
+        self,
+        mesh,
+        *,
+        dt: float | None = None,
+        t_end: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Optionally provide problem-specific FEM-smoke artifacts/metadata."""
         return None
 
     def evaluate_model_against_reference(

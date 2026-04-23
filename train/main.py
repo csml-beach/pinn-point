@@ -336,26 +336,31 @@ def run_geometry_smoke(problem_name="navier_stokes_channel_obstacle", mesh_size=
 
     problem = get_problem(problem_name)
     mesh = problem.create_mesh(maxh=mesh_size)
-    image_path = _save_mesh_plot(mesh)
-
-    num_vertices = len(mesh.vertices)
-    num_elements = len(list(mesh.Elements()))
+    smoke_meta = problem.build_geometry_smoke_metadata(mesh)
+    if smoke_meta is None:
+        image_path = _save_mesh_plot(mesh)
+        smoke_meta = {
+            "mesh_plot": image_path,
+            "num_vertices": len(mesh.vertices),
+            "num_elements": len(list(mesh.Elements())),
+        }
 
     write_run_metadata(
         extra={
             "mode": "geom-smoke",
             "problem_name": problem_name,
             "mesh_size": mesh_size,
-            "num_vertices": num_vertices,
-            "num_elements": num_elements,
-            "mesh_plot": image_path,
+            **smoke_meta,
         }
     )
 
     print("Geometry smoke completed successfully.")
-    print(f"Vertices: {num_vertices}")
-    print(f"Elements: {num_elements}")
-    print(f"Mesh plot: {image_path}")
+    if "num_vertices" in smoke_meta:
+        print(f"Vertices: {smoke_meta['num_vertices']}")
+    if "num_elements" in smoke_meta:
+        print(f"Elements: {smoke_meta['num_elements']}")
+    if "mesh_plot" in smoke_meta:
+        print(f"Mesh plot: {smoke_meta['mesh_plot']}")
     return run_id
 
 
@@ -381,34 +386,44 @@ def run_fem_smoke(
 
     problem = get_problem(problem_name)
     mesh = problem.create_mesh(maxh=mesh_size)
-    mesh_plot = _save_mesh_plot(mesh, filename="geometry_mesh.png")
+    smoke_meta = problem.build_fem_smoke_metadata(mesh, dt=dt, t_end=t_end)
+    if smoke_meta is None:
+        mesh_plot = _save_mesh_plot(mesh, filename="geometry_mesh.png")
 
-    if not hasattr(problem, "solve_fem_time_series"):
-        raise RuntimeError(f"Problem '{problem_name}' does not implement solve_fem_time_series")
+        if not hasattr(problem, "solve_fem_time_series"):
+            raise RuntimeError(
+                f"Problem '{problem_name}' does not implement solve_fem_time_series"
+            )
 
-    result = problem.solve_fem_time_series(mesh, dt=dt, t_end=t_end)
-    snapshot_paths = []
-    for snap in result["snapshots"]:
-        time_tag = f"{snap['time']:.2f}".replace(".", "p")
-        vel_path = _save_scalar_snapshot_plot(
-            mesh,
-            snap["velocity_magnitude"],
-            f"Velocity magnitude at t={snap['time']:.2f}",
-            f"velocity_magnitude_t{time_tag}.png",
-        )
-        pressure_path = _save_scalar_snapshot_plot(
-            mesh,
-            snap["pressure"],
-            f"Pressure at t={snap['time']:.2f}",
-            f"pressure_t{time_tag}.png",
-        )
-        snapshot_paths.append(
-            {
-                "time": snap["time"],
-                "velocity_magnitude_plot": vel_path,
-                "pressure_plot": pressure_path,
-            }
-        )
+        result = problem.solve_fem_time_series(mesh, dt=dt, t_end=t_end)
+        snapshot_paths = []
+        for snap in result["snapshots"]:
+            time_tag = f"{snap['time']:.2f}".replace(".", "p")
+            vel_path = _save_scalar_snapshot_plot(
+                mesh,
+                snap["velocity_magnitude"],
+                f"Velocity magnitude at t={snap['time']:.2f}",
+                f"velocity_magnitude_t{time_tag}.png",
+            )
+            pressure_path = _save_scalar_snapshot_plot(
+                mesh,
+                snap["pressure"],
+                f"Pressure at t={snap['time']:.2f}",
+                f"pressure_t{time_tag}.png",
+            )
+            snapshot_paths.append(
+                {
+                    "time": snap["time"],
+                    "velocity_magnitude_plot": vel_path,
+                    "pressure_plot": pressure_path,
+                }
+            )
+        smoke_meta = {
+            "num_vertices": len(mesh.vertices),
+            "num_elements": len(list(mesh.Elements())),
+            "mesh_plot": mesh_plot,
+            "snapshot_plots": snapshot_paths,
+        }
 
     write_run_metadata(
         extra={
@@ -417,20 +432,21 @@ def run_fem_smoke(
             "mesh_size": mesh_size,
             "dt": dt,
             "t_end": t_end,
-            "num_vertices": len(mesh.vertices),
-            "num_elements": len(list(mesh.Elements())),
-            "mesh_plot": mesh_plot,
-            "snapshot_plots": snapshot_paths,
+            **smoke_meta,
         }
     )
 
     print("FEM smoke completed successfully.")
-    print(f"Mesh plot: {mesh_plot}")
-    for item in snapshot_paths:
-        print(
-            f"  t={item['time']:.2f}: "
-            f"{item['velocity_magnitude_plot']} | {item['pressure_plot']}"
-        )
+    if "mesh_plot" in smoke_meta:
+        print(f"Mesh plot: {smoke_meta['mesh_plot']}")
+    for item in smoke_meta.get("snapshot_plots", []):
+        if "time" in item:
+            print(
+                f"  t={item['time']:.2f}: "
+                f"{item.get('velocity_magnitude_plot', '')} | {item.get('pressure_plot', '')}"
+            )
+    for item in smoke_meta.get("slice_plots", []):
+        print(f"  slice: {item}")
     return run_id
 
 

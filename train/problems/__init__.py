@@ -6,6 +6,9 @@ that can be solved using Physics-Informed Neural Networks.
 
 Available problems:
     - PoissonProblem: Poisson equation with localized source bumps
+    - PoissonRingProblem: eccentric annulus Poisson benchmark
+    - PoissonRingHardProblem: harder Poisson ring control benchmark
+    - AllenCahnObstacles2DProblem: transient Allen-Cahn with interior obstacles
     - AdvectionDiffusionProblem: steady advection-diffusion-reaction equation
     - NavierStokesChannelObstacleProblem: geometry-first prototype for a future
       transient Navier-Stokes benchmark
@@ -19,6 +22,7 @@ To add a new problem:
 Example:
     from problems import (
         PoissonProblem,
+        AllenCahnObstacles2DProblem,
         AdvectionDiffusionProblem,
         NavierStokesChannelObstacleProblem,
     )
@@ -30,12 +34,18 @@ Example:
 
 from .base import PDEProblem
 from .advection_diffusion import AdvectionDiffusionProblem
+from .allen_cahn_obstacles_2d import AllenCahnObstacles2DProblem
 from .navier_stokes_channel_obstacle import NavierStokesChannelObstacleProblem
 from .poisson import PoissonProblem
+from .poisson_ring import PoissonRingProblem
+from .poisson_ring_hard import PoissonRingHardProblem
 
 # Registry of available problems for CLI/config selection
 PROBLEM_REGISTRY = {
     "poisson": PoissonProblem,
+    "allen_cahn_obstacles_2d": AllenCahnObstacles2DProblem,
+    "poisson_ring": PoissonRingProblem,
+    "poisson_ring_hard": PoissonRingHardProblem,
     "advection_diffusion": AdvectionDiffusionProblem,
     "navier_stokes_channel_obstacle": NavierStokesChannelObstacleProblem,
 }

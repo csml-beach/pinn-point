@@ -77,6 +77,8 @@ def _build_initial_model_state(problem, vertex_array, base_seed: int):
     mesh_x, mesh_y = vertex_array.T
     prototype = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
     state = copy.deepcopy(prototype.state_dict())
+    for mesh_buffer_key in ("mesh_x", "mesh_y", "mesh_t"):
+        state.pop(mesh_buffer_key, None)
     del prototype
     return state
 
@@ -376,7 +378,7 @@ def run_mesh_refinement_method_training_fair(
         mesh_x=init_x, mesh_y=init_y, mesh_t=init_t, problem=problem
     ).to(DEVICE)
     if initial_state_dict is not None:
-        model.load_state_dict(copy.deepcopy(initial_state_dict))
+        model.load_state_dict(copy.deepcopy(initial_state_dict), strict=False)
     model.method_name = method_name
 
     # Store reference solution in model for consistent error assessment
@@ -584,16 +586,26 @@ def run_method_training_fair(
 
     print(f"Initial mesh: {initial_point_count:,} points")
 
-    # Initialize model
+    # Initialize the model on the actual iteration-0 collocation set so the
+    # fixed-budget method history starts from the same accepted-point budget
+    # used in training.
+    initial_x, initial_y = method.get_collocation_points(
+        initial_mesh,
+        model=None,
+        iteration=0,
+        num_points=collocation_budget,
+    )
     initial_x, initial_y, initial_t = _augment_points_for_problem(
         problem,
-        mesh_x,
-        mesh_y,
+        initial_x,
+        initial_y,
         mesh=initial_mesh,
         iteration=0,
         seed=method_seed,
-        purpose="initial",
+        purpose="train",
     )
+    print(f"Initial collocation budget: {len(initial_x):,} points")
+
     model = FeedForward(
         mesh_x=initial_x,
         mesh_y=initial_y,
@@ -601,14 +613,16 @@ def run_method_training_fair(
         problem=problem,
     ).to(DEVICE)
     if initial_state_dict is not None:
-        model.load_state_dict(copy.deepcopy(initial_state_dict))
+        model.load_state_dict(copy.deepcopy(initial_state_dict), strict=False)
     model.method_name = method_name
     model.reference_mesh = reference_mesh
     model.reference_solution = reference_solution
 
-    # Initialize tracking histories
-    model.mesh_point_history = [vertex_array.clone()]
-    model.mesh_point_count_history = [initial_point_count]
+    # Initialize tracking histories from the actual method-specific collocation set,
+    # not from the full initial mesh vertex list.
+    initial_points = torch.stack([initial_x, initial_y], dim=1).detach().cpu().clone()
+    model.mesh_point_history = [initial_points]
+    model.mesh_point_count_history = [len(initial_x)]
     model.total_error_history = []
     model.boundary_error_history = []
     random_fe_space = None
@@ -622,25 +636,26 @@ def run_method_training_fair(
         print(f"\n--- {method_name} Iteration {iteration + 1}/{num_adaptations} ---")
         iter_start = time.perf_counter()
 
-        # Get collocation points using the method
-        x, y = method.get_collocation_points(
-            initial_mesh,
-            model=model,
-            iteration=iteration,
-            num_points=collocation_budget,
-        )
-        x, y, t = _augment_points_for_problem(
-            problem,
-            x,
-            y,
-            mesh=initial_mesh,
-            iteration=iteration,
-            seed=method_seed,
-            purpose="train",
-        )
+        if iteration > 0:
+            # Get collocation points using the method
+            x, y = method.get_collocation_points(
+                initial_mesh,
+                model=model,
+                iteration=iteration,
+                num_points=collocation_budget,
+            )
+            x, y, t = _augment_points_for_problem(
+                problem,
+                x,
+                y,
+                mesh=initial_mesh,
+                iteration=iteration,
+                seed=method_seed,
+                purpose="train",
+            )
 
-        # Update model's residual computation points
-        model.set_mesh_points(x, y, mesh_t=t)
+            # Update model's residual computation points
+            model.set_mesh_points(x, y, mesh_t=t)
 
         actual_count = len(model.mesh_x)
         print(f"Using {actual_count:,} {method_name} points for residual computation")
@@ -823,8 +838,16 @@ def run_complete_experiment(
         shared_training_dataset, seed, validation_config
     )
     mesh_x, mesh_y = vertex_array.T
-    print(f"Shared training dataset: {len(mesh_x):,} points")
-    collocation_budget = len(mesh_x)
+    shared_label_count = len(training_dataset)
+    print(f"Shared training dataset: {shared_label_count:,} labels")
+    collocation_budget = problem.get_collocation_budget(
+        initial_mesh,
+        vertex_array,
+        training_dataset=training_dataset,
+    )
+    if collocation_budget is None:
+        collocation_budget = len(mesh_x)
+    collocation_budget = max(1, int(collocation_budget))
     _log_comparison_budget_policy(epochs, collocation_budget)
     validation_residual_points = _build_fixed_residual_validation_points(
         problem, initial_mesh, collocation_budget, seed, validation_config

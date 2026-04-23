@@ -137,7 +137,7 @@ class RADMethod(TrainingMethod):
         return weights, stats
 
     def _compute_residual_weights(
-        self, candidate_points: np.ndarray, model: Any
+        self, candidate_points: np.ndarray, model: Any, iteration: int = 0
     ) -> tuple[np.ndarray, dict[str, int | float | bool | str]]:
         """Compute probability weights based on PDE residual.
 
@@ -159,13 +159,33 @@ class RADMethod(TrainingMethod):
         y = torch.tensor(candidate_points[:, 1], dtype=torch.float32, device=DEVICE)
         x.requires_grad_(True)
         y.requires_grad_(True)
+        t = None
+        if (
+            self._problem is not None
+            and getattr(model, "has_time_input", False)
+            and hasattr(self._problem, "augment_collocation_points")
+        ):
+            _, _, t = self._problem.augment_collocation_points(
+                x,
+                y,
+                mesh=None,
+                iteration=int(iteration),
+                seed=self.seed,
+                purpose="rad_pdf",
+            )
 
         # Compute PDE residual
         if self._problem is not None:
-            residual = self._problem.pde_residual(model, x, y)
+            if t is None:
+                residual = self._problem.pde_residual(model, x, y)
+            else:
+                residual = self._problem.pde_residual(model, x, y, t)
         else:
             # Fallback: use model's built-in residual (for backward compatibility)
-            residual = model.PDE_residual(x, y)
+            if t is None:
+                residual = model.PDE_residual(x, y)
+            else:
+                residual = model.PDE_residual(x, y, t)
 
         residual_abs = torch.abs(residual).detach().cpu().numpy().astype(np.float64)
         residual_abs = np.reshape(residual_abs, (-1,))
@@ -323,7 +343,7 @@ class RADMethod(TrainingMethod):
             else:
                 # Compute residual-based weights
                 weights, pdf_stats = self._compute_residual_weights(
-                    self._candidate_points, model
+                    self._candidate_points, model, iteration=iteration
                 )
                 if pdf_stats.get("pdf_status") != "ok":
                     print(
@@ -389,11 +409,31 @@ class RADMethod(TrainingMethod):
         y = torch.tensor(self._cached_points[:, 1], dtype=torch.float32, device=DEVICE)
         x.requires_grad_(True)
         y.requires_grad_(True)
+        t = None
+        if (
+            self._problem is not None
+            and getattr(model, "has_time_input", False)
+            and hasattr(self._problem, "augment_collocation_points")
+        ):
+            _, _, t = self._problem.augment_collocation_points(
+                x,
+                y,
+                mesh=None,
+                iteration=int(iteration),
+                seed=self.seed,
+                purpose="rad_error",
+            )
 
         if self._problem is not None:
-            residual = self._problem.pde_residual(model, x, y)
+            if t is None:
+                residual = self._problem.pde_residual(model, x, y)
+            else:
+                residual = self._problem.pde_residual(model, x, y, t)
         else:
-            residual = model.PDE_residual(x, y)
+            if t is None:
+                residual = model.PDE_residual(x, y)
+            else:
+                residual = model.PDE_residual(x, y, t)
 
         return torch.abs(residual).detach().cpu().numpy()
 
