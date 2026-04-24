@@ -322,3 +322,23 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         )
         log.update(self._last_tempering_stats)
         return log
+
+
+class AdaptivePowerTemperedBeta25Method(AdaptivePowerTemperedMethod):
+    """Power-tempered sampler with a conservative beta_max=2.5 cap."""
+
+    name = "adaptive_power_tempered_beta25"
+    description = "Power-tempered adaptive residual sampling (beta_max=2.5)"
+
+    def __init__(self, *args: Any, beta_max: float = 2.5, **kwargs: Any) -> None:
+        super().__init__(*args, beta_max=beta_max, **kwargs)
+
+
+class AdaptivePowerTemperedBeta30Method(AdaptivePowerTemperedMethod):
+    """Power-tempered sampler with a conservative beta_max=3.0 cap."""
+
+    name = "adaptive_power_tempered_beta30"
+    description = "Power-tempered adaptive residual sampling (beta_max=3.0)"
+
+    def __init__(self, *args: Any, beta_max: float = 3.0, **kwargs: Any) -> None:
+        super().__init__(*args, beta_max=beta_max, **kwargs)

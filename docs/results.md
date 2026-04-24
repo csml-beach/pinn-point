@@ -30,6 +30,7 @@ Primary output roots:
 
 - `outputs/m3-large-cpu-allen-cahn-obstacles-power-vs-haltonbase-800e-10seed`
 - `outputs/m3-large-cpu-advection-power-vs-haltonbase-300e-10seed`
+- `outputs/m3-large-cpu-navier-stokes-power-vs-haltonbase-tend1p0-ref0035-dt0001-10seed`
 
 ### 10-seed selected-checkpoint means
 
@@ -39,6 +40,8 @@ Primary output roots:
 | Allen-Cahn obstacles | `adaptive_halton_base` | `0.18357 ± 0.00616` | `0.01584 ± 0.00308` |
 | Advection-diffusion | `adaptive_power_tempered` | `0.57611 ± 0.06164` | `0.59527 ± 0.04870` |
 | Advection-diffusion | `adaptive_halton_base` | `0.59712 ± 0.07019` | `0.62473 ± 0.06560` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered` | `0.49786 ± 0.03128` | `0.14821 ± 0.01426` |
+| Navier-Stokes channel-obstacle | `adaptive_halton_base` | `0.49860 ± 0.03005` | `0.14395 ± 0.01279` |
 
 ### Paired seed-by-seed check
 
@@ -51,6 +54,8 @@ negative means `adaptive_power_tempered` is better.
 | Allen-Cahn obstacles | Relative Fixed L2 Residual | `+0.00213 ± 0.00316` | `2 / 10` |
 | Advection-diffusion | Relative L2 Error | `-0.02101 ± 0.02331` | `8 / 10` |
 | Advection-diffusion | Relative Fixed L2 Residual | `-0.02947 ± 0.04744` | `7 / 10` |
+| Navier-Stokes channel-obstacle | Relative L2 Error | `-0.00075 ± 0.00721` | `4 / 10` |
+| Navier-Stokes channel-obstacle | Relative Fixed L2 Residual | `+0.00426 ± 0.00917` | `3 / 10` |
 
 Interpretation:
 
@@ -58,9 +63,11 @@ Interpretation:
   gives up residual control relative to `adaptive_halton_base`.
 - On advection-diffusion, `adaptive_power_tempered` improves both solution error
   and residual in this 10-seed head-to-head.
-- The result is promising but not yet a replacement decision; the next required
-  check is Navier-Stokes because the first two benchmarks show different
-  error/residual behavior.
+- On Navier-Stokes, `adaptive_power_tempered` is effectively tied on solution
+  error but gives up a small amount of residual control.
+- The result is promising as a cleaner method family, but the current
+  `beta_max = 4.0` setting appears slightly too concentrated on two of the
+  three benchmarks. The next tuning target is a lower `beta_max`.
 
 ### 20-seed selected-checkpoint means
 

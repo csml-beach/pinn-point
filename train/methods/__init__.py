@@ -32,7 +32,11 @@ from .adaptive import AdaptiveMethod
 from .adaptive_entropy_balanced import AdaptiveEntropyBalancedMethod
 from .adaptive_halton_base import AdaptiveHaltonBaseMethod
 from .adaptive_persistent import AdaptivePersistentMethod
-from .adaptive_power_tempered import AdaptivePowerTemperedMethod
+from .adaptive_power_tempered import (
+    AdaptivePowerTemperedBeta25Method,
+    AdaptivePowerTemperedBeta30Method,
+    AdaptivePowerTemperedMethod,
+)
 from .hybrid_anchor import AdaptiveHybridAnchorMethod
 from .random import RandomMethod
 from .quasi_random import HaltonMethod, SobolMethod
@@ -45,6 +49,8 @@ METHOD_REGISTRY = {
     "adaptive_halton_base": AdaptiveHaltonBaseMethod,
     "adaptive_persistent": AdaptivePersistentMethod,
     "adaptive_power_tempered": AdaptivePowerTemperedMethod,
+    "adaptive_power_tempered_beta25": AdaptivePowerTemperedBeta25Method,
+    "adaptive_power_tempered_beta30": AdaptivePowerTemperedBeta30Method,
     "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,
     "halton": HaltonMethod,
