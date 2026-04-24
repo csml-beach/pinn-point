@@ -51,6 +51,7 @@ from visualization import create_multi_method_visualizations
 
 MESH_REFINEMENT_METHODS = {
     "adaptive",
+    "adaptive_halton_base",
     "adaptive_persistent",
     "adaptive_hybrid_anchor",
 }
@@ -264,6 +265,20 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         )
         method.description = (
             "Residual-guided interior sampling with persistence-weighted scoring"
+        )
+    elif method_name == "adaptive_halton_base":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            domain_bounds=domain_bounds,
+            area_exponent=0.5,
+            persistence_alpha=0.5,
+            backbone_fraction=0.5,
+            warmup_iterations=1,
+        )
+        method.description = (
+            "Halton-backed persistent adaptive residual sampling"
         )
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(

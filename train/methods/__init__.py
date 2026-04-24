@@ -6,6 +6,7 @@ selection and mesh refinement strategies.
 
 Available methods:
     - AdaptiveMethod: Residual-based adaptive mesh refinement
+    - AdaptiveHaltonBaseMethod: Adaptive sampling with Halton coverage backbone
     - RandomMethod: Uniform random point sampling (baseline)
     - HaltonMethod: Halton low-discrepancy sequence sampling
     - SobolMethod: Sobol low-discrepancy sequence sampling
@@ -26,6 +27,7 @@ Example:
 
 from .base import TrainingMethod
 from .adaptive import AdaptiveMethod
+from .adaptive_halton_base import AdaptiveHaltonBaseMethod
 from .adaptive_persistent import AdaptivePersistentMethod
 from .hybrid_anchor import AdaptiveHybridAnchorMethod
 from .random import RandomMethod
@@ -35,6 +37,7 @@ from .rad import RADMethod
 # Registry of available methods for CLI/config selection
 METHOD_REGISTRY = {
     "adaptive": AdaptiveMethod,
+    "adaptive_halton_base": AdaptiveHaltonBaseMethod,
     "adaptive_persistent": AdaptivePersistentMethod,
     "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,

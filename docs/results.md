@@ -1,5 +1,105 @@
 # Current Results Summary
 
+## Approved Suite with `adaptive_halton_base`, 20 Seeds
+
+Current strongest approved-suite comparison:
+
+- methods: `adaptive_halton_base`, `adaptive_persistent`, `adaptive`, `random`, `halton`, `rad`
+- seeds: `20` per benchmark
+- metrics: selected-checkpoint metrics from `reports/all_methods_histories.csv`
+- manifest policy: per-seed manifests are the source of truth; failed first-attempt Navier-Stokes folders are ignored
+
+Primary output roots:
+
+- `outputs/m3-large-cpu-allen-cahn-obstacles-screen-haltonbase-800e-20seed`
+- `outputs/m3-large-cpu-advection-diffusion-screen-haltonbase-300e-20seed`
+- `outputs/m3-large-cpu-navier-stokes-screen-haltonbase-tend1p0-ref0035-dt0001-20seed`
+
+### 20-seed selected-checkpoint means
+
+| Problem | Best Mean Error | `adaptive_halton_base` Error | Best Mean Residual | `adaptive_halton_base` Residual |
+| --- | ---: | ---: | ---: | ---: |
+| Allen-Cahn obstacles | `rad`: `0.1864 ± 0.0134` | `0.1913 ± 0.0124` | `adaptive_halton_base`: `0.01392 ± 0.00343` | `0.01392 ± 0.00343` |
+| Advection-diffusion | `adaptive_halton_base`: `0.6423 ± 0.0822` | `0.6423 ± 0.0822` | `adaptive_halton_base`: `0.6785 ± 0.0959` | `0.6785 ± 0.0959` |
+| Navier-Stokes channel-obstacle | `halton`: `0.4927 ± 0.0280` | `0.4968 ± 0.0267` | `adaptive_halton_base`: `0.1384 ± 0.0148` | `0.1384 ± 0.0148` |
+
+### Full method means
+
+Allen-Cahn obstacles (`800` epochs, `6` iterations):
+
+| Method | Relative L2 Error | Relative Fixed L2 Residual |
+| --- | ---: | ---: |
+| `rad` | `0.1864 ± 0.0134` | `0.02364 ± 0.00598` |
+| `halton` | `0.1873 ± 0.0132` | `0.02448 ± 0.00711` |
+| `random` | `0.1878 ± 0.0127` | `0.02664 ± 0.00839` |
+| `adaptive_persistent` | `0.1898 ± 0.0128` | `0.01667 ± 0.00488` |
+| `adaptive` | `0.1909 ± 0.0114` | `0.01400 ± 0.00409` |
+| `adaptive_halton_base` | `0.1913 ± 0.0124` | `0.01392 ± 0.00343` |
+
+Advection-diffusion (`300` epochs, `8` iterations):
+
+| Method | Relative L2 Error | Relative Fixed L2 Residual |
+| --- | ---: | ---: |
+| `adaptive_halton_base` | `0.6423 ± 0.0822` | `0.6785 ± 0.0959` |
+| `random` | `0.6660 ± 0.0965` | `0.8253 ± 0.1030` |
+| `halton` | `0.6690 ± 0.0888` | `0.8144 ± 0.0862` |
+| `rad` | `0.6704 ± 0.0742` | `0.7800 ± 0.0591` |
+| `adaptive_persistent` | `0.6833 ± 0.0905` | `1.0046 ± 0.1911` |
+| `adaptive` | `0.6968 ± 0.0705` | `0.9071 ± 0.0980` |
+
+Navier-Stokes channel-obstacle (`t_end = 1.0`, `dt = 0.001`, `200` epochs, `6` iterations):
+
+| Method | Relative L2 Error | Relative Fixed L2 Residual |
+| --- | ---: | ---: |
+| `halton` | `0.4927 ± 0.0280` | `0.1694 ± 0.0200` |
+| `rad` | `0.4937 ± 0.0283` | `0.1552 ± 0.0181` |
+| `adaptive_halton_base` | `0.4968 ± 0.0267` | `0.1384 ± 0.0148` |
+| `random` | `0.4970 ± 0.0225` | `0.1725 ± 0.0272` |
+| `adaptive_persistent` | `0.4987 ± 0.0253` | `0.1386 ± 0.0105` |
+| `adaptive` | `0.5008 ± 0.0269` | `0.1443 ± 0.0156` |
+
+### Paired seed-by-seed conclusions
+
+Paired differences below use `adaptive_halton_base - baseline`; negative means `adaptive_halton_base` is better.
+
+Allen-Cahn:
+
+- Error: `adaptive_halton_base` is not the winner; it is significantly worse than `rad`, `halton`, and `random` on mean paired error.
+- Residual: `adaptive_halton_base` is the best residual method, beating `random`, `halton`, and `rad` on `20 / 20` seeds and beating `adaptive_persistent` on `17 / 20` seeds.
+- Versus plain `adaptive`, residual is essentially tied: mean paired residual difference `-0.000077`, `p = 0.884`.
+
+Advection-diffusion:
+
+- Error: `adaptive_halton_base` beats every baseline; paired wins are `17 / 20` vs `adaptive`, `14 / 20` vs `adaptive_persistent`, `14 / 20` vs `random`, `15 / 20` vs `halton`, and `17 / 20` vs `rad`.
+- Residual: `adaptive_halton_base` beats every baseline with paired p-values below `0.001` versus all methods except no exception; wins range from `16 / 20` to `20 / 20`.
+- This is the cleanest positive benchmark for the new scheme.
+
+Navier-Stokes:
+
+- Error: differences are small; `halton` and `rad` have slightly better mean error, but `adaptive_halton_base` is statistically comparable to most methods.
+- Residual: `adaptive_halton_base` has the best mean residual and significantly beats `random`, `halton`, and `rad`; it is essentially tied with `adaptive_persistent`.
+- Versus plain `adaptive`, `adaptive_halton_base` improves both error and residual modestly.
+
+### Current interpretation
+
+The defensible paper claim is not that `adaptive_halton_base` always minimizes solution error. The stronger and better-supported claim is:
+
+> A Halton-backed persistent adaptive sampler provides the most consistent PDE-residual control across the approved suite while remaining competitive in solution error, and it is the clear winner on advection-diffusion in both error and residual.
+
+This gives a cleaner story than the original `adaptive_persistent` mainline:
+
+- The Halton backbone fixes the coverage weakness exposed by competitive `random` and `halton` baselines.
+- Rank-normalized persistence makes residual targeting less sensitive to raw PDE residual scale.
+- On Allen-Cahn and Navier-Stokes, the method sits on the residual-favorable side of the error/residual Pareto tradeoff.
+- On advection-diffusion, it improves both objectives.
+
+Recommended figure/table package:
+
+1. A three-problem table with mean ± standard deviation for error and residual.
+2. A paired-difference plot for `adaptive_halton_base` versus `random`, `halton`, and `rad`.
+3. A Pareto plot of mean error versus mean residual, one panel per problem.
+4. A short negative-control note: Allen-Cahn still rewards broad-coverage methods on solution error, but not on residual.
+
 ## Allen-Cahn Obstacles, 400 Epochs
 
 Current strongest Allen-Cahn comparison:

@@ -7,8 +7,8 @@ Usage:
   submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X]
 
 Description:
-  Submit an advection-diffusion five-method screen confirm study on m3-large-cpu
-  for adaptive_persistent, adaptive, random, halton, and rad.
+  Submit an advection-diffusion screen confirm study on m3-large-cpu
+  for adaptive_halton_base, adaptive_persistent, adaptive, random, halton, and rad.
 EOF
 }
 
@@ -128,6 +128,7 @@ remote_copy_to "$repo_root/train/utils.py" "$REMOTE_REPO_PATH/train/utils.py"
 remote_copy_to "$repo_root/train/visualization.py" "$REMOTE_REPO_PATH/train/visualization.py"
 remote_copy_to "$repo_root/train/methods/__init__.py" "$REMOTE_REPO_PATH/train/methods/__init__.py"
 remote_copy_to "$repo_root/train/methods/adaptive.py" "$REMOTE_REPO_PATH/train/methods/adaptive.py"
+remote_copy_to "$repo_root/train/methods/adaptive_halton_base.py" "$REMOTE_REPO_PATH/train/methods/adaptive_halton_base.py"
 remote_copy_to "$repo_root/train/methods/adaptive_persistent.py" "$REMOTE_REPO_PATH/train/methods/adaptive_persistent.py"
 remote_copy_to "$repo_root/train/methods/base.py" "$REMOTE_REPO_PATH/train/methods/base.py"
 remote_copy_to "$repo_root/train/methods/quasi_random.py" "$REMOTE_REPO_PATH/train/methods/quasi_random.py"
@@ -170,7 +171,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --device cpu \\
   screen \\
   --problem advection_diffusion \\
-  --methods adaptive_persistent,adaptive,random,halton,rad \\
+  --methods adaptive_halton_base,adaptive_persistent,adaptive,random,halton,rad \\
   --seed $seed \\
   --iterations $iterations \\
   --epochs $epochs \\
