@@ -15,6 +15,53 @@ Primary output roots:
 - `outputs/m3-large-cpu-advection-diffusion-screen-haltonbase-300e-20seed`
 - `outputs/m3-large-cpu-navier-stokes-screen-haltonbase-tend1p0-ref0035-dt0001-20seed`
 
+## `adaptive_power_tempered` Head-to-Head, 10 Seeds
+
+`adaptive_power_tempered` is a mesh-native variant that replaces the explicit
+Halton backbone with one power-tempered element distribution:
+
+`p_i proportional to area_i^a * exp(beta * z_i)`.
+
+Here `z_i` is a rank-persistent residual score in `[0, 1]`, and `beta` increases
+when the residual field is spatially concentrated. The goal is to preserve broad
+coverage without piggybacking on a low-discrepancy sequence.
+
+Primary output roots:
+
+- `outputs/m3-large-cpu-allen-cahn-obstacles-power-vs-haltonbase-800e-10seed`
+- `outputs/m3-large-cpu-advection-power-vs-haltonbase-300e-10seed`
+
+### 10-seed selected-checkpoint means
+
+| Problem | Method | Relative L2 Error | Relative Fixed L2 Residual |
+| --- | --- | ---: | ---: |
+| Allen-Cahn obstacles | `adaptive_power_tempered` | `0.18155 ± 0.00627` | `0.01797 ± 0.00487` |
+| Allen-Cahn obstacles | `adaptive_halton_base` | `0.18357 ± 0.00616` | `0.01584 ± 0.00308` |
+| Advection-diffusion | `adaptive_power_tempered` | `0.57611 ± 0.06164` | `0.59527 ± 0.04870` |
+| Advection-diffusion | `adaptive_halton_base` | `0.59712 ± 0.07019` | `0.62473 ± 0.06560` |
+
+### Paired seed-by-seed check
+
+Paired differences below use `adaptive_power_tempered - adaptive_halton_base`;
+negative means `adaptive_power_tempered` is better.
+
+| Problem | Metric | Mean Paired Difference | Sign Count Favoring `adaptive_power_tempered` |
+| --- | --- | ---: | ---: |
+| Allen-Cahn obstacles | Relative L2 Error | `-0.00202 ± 0.00243` | `9 / 10` |
+| Allen-Cahn obstacles | Relative Fixed L2 Residual | `+0.00213 ± 0.00316` | `2 / 10` |
+| Advection-diffusion | Relative L2 Error | `-0.02101 ± 0.02331` | `8 / 10` |
+| Advection-diffusion | Relative Fixed L2 Residual | `-0.02947 ± 0.04744` | `7 / 10` |
+
+Interpretation:
+
+- On Allen-Cahn, `adaptive_power_tempered` improves solution error slightly but
+  gives up residual control relative to `adaptive_halton_base`.
+- On advection-diffusion, `adaptive_power_tempered` improves both solution error
+  and residual in this 10-seed head-to-head.
+- The result is promising but not yet a replacement decision; the next required
+  check is Navier-Stokes because the first two benchmarks show different
+  error/residual behavior.
+
 ### 20-seed selected-checkpoint means
 
 | Problem | Best Mean Error | `adaptive_halton_base` Error | Best Mean Residual | `adaptive_halton_base` Residual |
