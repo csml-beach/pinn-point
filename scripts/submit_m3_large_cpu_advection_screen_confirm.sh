@@ -4,11 +4,12 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X]
+  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X]
 
 Description:
   Submit an advection-diffusion screen confirm study on m3-large-cpu
-  for adaptive_halton_base, adaptive_persistent, adaptive, random, halton, and rad.
+  for adaptive_power_tempered, adaptive_entropy_balanced, adaptive_halton_base,
+  adaptive_persistent, adaptive, random, halton, and rad.
 EOF
 }
 
@@ -21,6 +22,7 @@ config_file=""
 sync_root=""
 reference_mesh_factor="0.05"
 seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066,7077,8088,9099,11111,12121,13131,14141,15151,16161,17171"
+methods_csv="adaptive_power_tempered,adaptive_entropy_balanced,adaptive_halton_base,adaptive_persistent,adaptive,random,halton,rad"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --seeds)
       seeds_csv="$2"
+      shift 2
+      ;;
+    --methods)
+      methods_csv="$2"
       shift 2
       ;;
     --commit)
@@ -128,8 +134,10 @@ remote_copy_to "$repo_root/train/utils.py" "$REMOTE_REPO_PATH/train/utils.py"
 remote_copy_to "$repo_root/train/visualization.py" "$REMOTE_REPO_PATH/train/visualization.py"
 remote_copy_to "$repo_root/train/methods/__init__.py" "$REMOTE_REPO_PATH/train/methods/__init__.py"
 remote_copy_to "$repo_root/train/methods/adaptive.py" "$REMOTE_REPO_PATH/train/methods/adaptive.py"
+remote_copy_to "$repo_root/train/methods/adaptive_entropy_balanced.py" "$REMOTE_REPO_PATH/train/methods/adaptive_entropy_balanced.py"
 remote_copy_to "$repo_root/train/methods/adaptive_halton_base.py" "$REMOTE_REPO_PATH/train/methods/adaptive_halton_base.py"
 remote_copy_to "$repo_root/train/methods/adaptive_persistent.py" "$REMOTE_REPO_PATH/train/methods/adaptive_persistent.py"
+remote_copy_to "$repo_root/train/methods/adaptive_power_tempered.py" "$REMOTE_REPO_PATH/train/methods/adaptive_power_tempered.py"
 remote_copy_to "$repo_root/train/methods/base.py" "$REMOTE_REPO_PATH/train/methods/base.py"
 remote_copy_to "$repo_root/train/methods/quasi_random.py" "$REMOTE_REPO_PATH/train/methods/quasi_random.py"
 remote_copy_to "$repo_root/train/methods/rad.py" "$REMOTE_REPO_PATH/train/methods/rad.py"
@@ -171,7 +179,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --device cpu \\
   screen \\
   --problem advection_diffusion \\
-  --methods adaptive_halton_base,adaptive_persistent,adaptive,random,halton,rad \\
+  --methods $methods_csv \\
   --seed $seed \\
   --iterations $iterations \\
   --epochs $epochs \\

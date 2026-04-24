@@ -51,8 +51,10 @@ from visualization import create_multi_method_visualizations
 
 MESH_REFINEMENT_METHODS = {
     "adaptive",
+    "adaptive_entropy_balanced",
     "adaptive_halton_base",
     "adaptive_persistent",
+    "adaptive_power_tempered",
     "adaptive_hybrid_anchor",
 }
 
@@ -279,6 +281,36 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         )
         method.description = (
             "Halton-backed persistent adaptive residual sampling"
+        )
+    elif method_name == "adaptive_entropy_balanced":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            area_exponent=0.5,
+            persistence_alpha=0.5,
+            lambda_min=0.25,
+            lambda_max=0.75,
+            rank_gamma=1.0,
+            warmup_iterations=1,
+        )
+        method.description = (
+            "Entropy-balanced rank-persistent adaptive residual sampling"
+        )
+    elif method_name == "adaptive_power_tempered":
+        method = get_method(
+            method_name,
+            refinement_threshold=MESH_CONFIG["refinement_threshold"],
+            seed=method_seed,
+            area_exponent=0.5,
+            persistence_alpha=0.5,
+            beta_min=1.0,
+            beta_max=4.0,
+            coverage_area_exponent=0.5,
+            warmup_iterations=1,
+        )
+        method.description = (
+            "Power-tempered rank-persistent adaptive residual sampling"
         )
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(
