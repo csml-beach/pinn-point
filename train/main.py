@@ -1154,7 +1154,9 @@ def run_screen_experiment(
     methods_to_run = methods_to_run or list(SCREEN_DEFAULT_METHODS)
     set_global_seed(seed)
 
-    run_id = generate_run_id(f"screen-seed{seed}")
+    run_tag_suffix = os.environ.get("PINN_RUN_TAG_SUFFIX", "").strip()
+    run_tag = f"screen-{run_tag_suffix}-seed{seed}" if run_tag_suffix else f"screen-seed{seed}"
+    run_id = generate_run_id(run_tag)
     run_paths = set_active_run(run_id)
     print(f"Screen run ID: {run_id}")
     print(f"Outputs root: {run_paths['root']}")
@@ -1172,7 +1174,9 @@ def run_screen_experiment(
                 "seed": seed,
                 "methods": methods_to_run,
                 "problem": problem_name,
+                "problem_kwargs": problem_kwargs,
                 "profile": "screen",
+                "run_tag_suffix": run_tag_suffix,
             }
         )
 
@@ -1198,7 +1202,9 @@ def run_screen_experiment(
                 "seed": seed,
                 "methods": methods_to_run,
                 "problem": problem_name,
+                "problem_kwargs": problem_kwargs,
                 "profile": "screen",
+                "run_tag_suffix": run_tag_suffix,
             }
         )
 

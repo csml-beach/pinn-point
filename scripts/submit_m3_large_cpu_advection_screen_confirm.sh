@@ -184,6 +184,7 @@ export OPENBLAS_NUM_THREADS=$threads_per_job
 export NUMEXPR_NUM_THREADS=$threads_per_job
 export VECLIB_MAXIMUM_THREADS=$threads_per_job
 export NGS_NUM_THREADS=$threads_per_job
+export PINN_RUN_TAG_SUFFIX='$session_prefix'
 
 VALIDATION_OPTIONS='{"restore_best_epoch_checkpoint": false}'
 
