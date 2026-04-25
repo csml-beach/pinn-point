@@ -15,6 +15,29 @@ Primary output roots:
 - `outputs/m3-large-cpu-advection-diffusion-screen-haltonbase-300e-20seed`
 - `outputs/m3-large-cpu-navier-stokes-screen-haltonbase-tend1p0-ref0035-dt0001-20seed`
 
+## Method Status
+
+Current paper-facing default suite:
+
+- `adaptive_power_tempered`: current clean mesh-native candidate; keep as the
+  main power-tempered method with `beta_max = 4.0` and no coverage floor.
+- `adaptive_halton_base`: strongest residual-control reference method.
+- `adaptive_persistent`, `adaptive`, `random`, `halton`, `rad`: retained
+  baselines.
+
+Retained negative/tuning variants, not default:
+
+- `adaptive_entropy_balanced`: tested as an entropy-mixture adaptive variant;
+  not competitive enough to keep in the default suite.
+- `adaptive_power_tempered_beta25` and `adaptive_power_tempered_beta30`: lower
+  beta caps did not improve the overall tradeoff.
+- `adaptive_power_tempered_floor15` and `adaptive_power_tempered_floor25`: fixed
+  true-area coverage floors did not close the residual gap and degraded
+  advection performance.
+
+These negative variants remain registered and selectable via `--methods` so the
+same dead ends are not rediscovered later.
+
 ## `adaptive_power_tempered` Head-to-Head, 10 Seeds
 
 `adaptive_power_tempered` is a mesh-native variant that replaces the explicit

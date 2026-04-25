@@ -8,8 +8,8 @@ Usage:
 
 Description:
   Submit an advection-diffusion screen confirm study on m3-large-cpu
-  for adaptive_power_tempered, adaptive_entropy_balanced, adaptive_halton_base,
-  adaptive_persistent, adaptive, random, halton, and rad.
+  for adaptive_power_tempered, adaptive_halton_base, adaptive_persistent,
+  adaptive, random, halton, and rad.
 EOF
 }
 
@@ -22,7 +22,9 @@ config_file=""
 sync_root=""
 reference_mesh_factor="0.05"
 seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066,7077,8088,9099,11111,12121,13131,14141,15151,16161,17171"
-methods_csv="adaptive_power_tempered,adaptive_entropy_balanced,adaptive_halton_base,adaptive_persistent,adaptive,random,halton,rad"
+# Paper-facing default suite. Negative/tuning variants remain selectable via
+# --methods, but are intentionally not included by default.
+methods_csv="adaptive_power_tempered,adaptive_halton_base,adaptive_persistent,adaptive,random,halton,rad"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
