@@ -69,6 +69,44 @@ Interpretation:
   `beta_max = 4.0` setting appears slightly too concentrated on two of the
   three benchmarks. The next tuning target is a lower `beta_max`.
 
+### Beta cap tuning
+
+Follow-up tuning compared `beta_max = 2.5`, `3.0`, and `4.0` against
+`adaptive_halton_base` on the same 10 seeds. The variants are named
+`adaptive_power_tempered_beta25`, `adaptive_power_tempered_beta30`, and
+`adaptive_power_tempered`, respectively.
+
+Primary output roots:
+
+- `outputs/m3-large-cpu-allen-cahn-obstacles-power-beta-tune-800e-10seed`
+- `outputs/m3-large-cpu-advection-power-beta-tune-300e-10seed`
+- `outputs/m3-large-cpu-navier-stokes-power-beta-tune-tend1p0-ref0035-dt0001-10seed`
+
+| Problem | Method | Relative L2 Error | Relative Fixed L2 Residual |
+| --- | --- | ---: | ---: |
+| Allen-Cahn obstacles | `adaptive_power_tempered_beta25` | `0.18181 ± 0.00666` | `0.01884 ± 0.00491` |
+| Allen-Cahn obstacles | `adaptive_power_tempered_beta30` | `0.18199 ± 0.00671` | `0.01801 ± 0.00429` |
+| Allen-Cahn obstacles | `adaptive_power_tempered` | `0.18155 ± 0.00627` | `0.01797 ± 0.00487` |
+| Allen-Cahn obstacles | `adaptive_halton_base` | `0.18357 ± 0.00616` | `0.01584 ± 0.00308` |
+| Advection-diffusion | `adaptive_power_tempered_beta25` | `0.58319 ± 0.06518` | `0.59331 ± 0.02997` |
+| Advection-diffusion | `adaptive_power_tempered_beta30` | `0.58615 ± 0.05756` | `0.59578 ± 0.02204` |
+| Advection-diffusion | `adaptive_power_tempered` | `0.57611 ± 0.06164` | `0.59527 ± 0.04870` |
+| Advection-diffusion | `adaptive_halton_base` | `0.59712 ± 0.07019` | `0.62473 ± 0.06560` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered_beta25` | `0.50012 ± 0.02755` | `0.14582 ± 0.01736` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered_beta30` | `0.50146 ± 0.03305` | `0.14495 ± 0.01554` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered` | `0.50059 ± 0.03105` | `0.14404 ± 0.01623` |
+| Navier-Stokes channel-obstacle | `adaptive_halton_base` | `0.50054 ± 0.03076` | `0.14305 ± 0.01284` |
+
+Interpretation:
+
+- Lowering `beta_max` did not fix the Allen-Cahn or Navier-Stokes residual gap.
+- On advection-diffusion, `beta_max = 2.5` gives the best residual, but the
+  original `beta_max = 4.0` gives the best error and remains essentially tied
+  on residual.
+- The safest fixed power-tempered setting is still the original
+  `beta_max = 4.0`. The problem is not simply over-concentration from too large
+  a beta cap.
+
 ### 20-seed selected-checkpoint means
 
 | Problem | Best Mean Error | `adaptive_halton_base` Error | Best Mean Residual | `adaptive_halton_base` Residual |
