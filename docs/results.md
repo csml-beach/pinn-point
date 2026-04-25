@@ -107,6 +107,49 @@ Interpretation:
   `beta_max = 4.0`. The problem is not simply over-concentration from too large
   a beta cap.
 
+### Coverage-floor tuning
+
+Follow-up tuning tested whether the residual gap was caused by insufficient
+background coverage. The variants mix the persistent power-tempered element
+distribution with true area-proportional mesh coverage:
+
+`p_i = (1 - rho) * power_tempered_i + rho * area_i_distribution`.
+
+The tested variants were `rho = 0.15` and `rho = 0.25`, named
+`adaptive_power_tempered_floor15` and `adaptive_power_tempered_floor25`.
+
+Primary output roots:
+
+- `outputs/m3-large-cpu-allen-cahn-obstacles-power-floor-tune-800e-10seed`
+- `outputs/m3-large-cpu-advection-power-floor-tune-300e-10seed`
+- `outputs/m3-large-cpu-navier-stokes-power-floor-tune-tend1p0-ref0035-dt0001-10seed`
+
+| Problem | Method | Relative L2 Error | Relative Fixed L2 Residual |
+| --- | --- | ---: | ---: |
+| Allen-Cahn obstacles | `adaptive_power_tempered_floor15` | `0.18167 ± 0.00692` | `0.01879 ± 0.00447` |
+| Allen-Cahn obstacles | `adaptive_power_tempered_floor25` | `0.18111 ± 0.00604` | `0.02251 ± 0.00758` |
+| Allen-Cahn obstacles | `adaptive_power_tempered` | `0.18155 ± 0.00627` | `0.01797 ± 0.00487` |
+| Allen-Cahn obstacles | `adaptive_halton_base` | `0.18357 ± 0.00616` | `0.01584 ± 0.00308` |
+| Advection-diffusion | `adaptive_power_tempered_floor15` | `0.58669 ± 0.06896` | `0.60834 ± 0.03984` |
+| Advection-diffusion | `adaptive_power_tempered_floor25` | `0.59217 ± 0.06650` | `0.61857 ± 0.04898` |
+| Advection-diffusion | `adaptive_power_tempered` | `0.57611 ± 0.06164` | `0.59527 ± 0.04870` |
+| Advection-diffusion | `adaptive_halton_base` | `0.59712 ± 0.07019` | `0.62473 ± 0.06560` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered_floor15` | `0.49733 ± 0.03218` | `0.15116 ± 0.01368` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered_floor25` | `0.50063 ± 0.03052` | `0.14961 ± 0.01075` |
+| Navier-Stokes channel-obstacle | `adaptive_power_tempered` | `0.50404 ± 0.02640` | `0.14309 ± 0.01262` |
+| Navier-Stokes channel-obstacle | `adaptive_halton_base` | `0.50235 ± 0.02837` | `0.14495 ± 0.01338` |
+
+Interpretation:
+
+- A fixed true-area floor did not solve the residual-control weakness.
+- On Allen-Cahn, both floors preserve or slightly improve error, but residual
+  gets worse; `floor25` is especially poor.
+- On advection-diffusion, the floors reduce the original `adaptive_power_tempered`
+  advantage in both error and residual.
+- On Navier-Stokes, `floor15` improves mean error, but it gives up residual.
+- The best current power-tempered mainline remains the unfloored
+  `adaptive_power_tempered` with `beta_max = 4.0`.
+
 ### 20-seed selected-checkpoint means
 
 | Problem | Best Mean Error | `adaptive_halton_base` Error | Best Mean Residual | `adaptive_halton_base` Residual |
