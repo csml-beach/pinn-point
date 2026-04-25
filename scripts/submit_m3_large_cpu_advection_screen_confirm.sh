@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X]
+  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--problem-kwargs JSON]
 
 Description:
   Submit an advection-diffusion screen confirm study on m3-large-cpu
@@ -21,6 +21,7 @@ commit_sha="$(git rev-parse origin/codex/navier-stokes-channel-obstacle)"
 config_file=""
 sync_root=""
 reference_mesh_factor="0.05"
+problem_kwargs='{}'
 seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066,7077,8088,9099,11111,12121,13131,14141,15151,16161,17171"
 # Paper-facing default suite. Negative/tuning variants remain selectable via
 # --methods, but are intentionally not included by default.
@@ -66,6 +67,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --reference-mesh-factor)
       reference_mesh_factor="$2"
+      shift 2
+      ;;
+    --problem-kwargs)
+      problem_kwargs="$2"
       shift 2
       ;;
     -h|--help)
@@ -186,6 +191,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --iterations $iterations \\
   --epochs $epochs \\
   --reference-mesh-factor $reference_mesh_factor \\
+  --problem-kwargs '$problem_kwargs' \\
   --validation-options "\$VALIDATION_OPTIONS"
 rc=\$?
 set -e
