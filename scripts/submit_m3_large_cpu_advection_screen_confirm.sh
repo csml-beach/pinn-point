@@ -139,20 +139,12 @@ remote_copy_to "$repo_root/train/pinn_model.py" "$REMOTE_REPO_PATH/train/pinn_mo
 remote_copy_to "$repo_root/train/training.py" "$REMOTE_REPO_PATH/train/training.py"
 remote_copy_to "$repo_root/train/utils.py" "$REMOTE_REPO_PATH/train/utils.py"
 remote_copy_to "$repo_root/train/visualization.py" "$REMOTE_REPO_PATH/train/visualization.py"
-remote_copy_to "$repo_root/train/methods/__init__.py" "$REMOTE_REPO_PATH/train/methods/__init__.py"
-remote_copy_to "$repo_root/train/methods/adaptive.py" "$REMOTE_REPO_PATH/train/methods/adaptive.py"
-remote_copy_to "$repo_root/train/methods/adaptive_entropy_balanced.py" "$REMOTE_REPO_PATH/train/methods/adaptive_entropy_balanced.py"
-remote_copy_to "$repo_root/train/methods/adaptive_halton_base.py" "$REMOTE_REPO_PATH/train/methods/adaptive_halton_base.py"
-remote_copy_to "$repo_root/train/methods/adaptive_persistent.py" "$REMOTE_REPO_PATH/train/methods/adaptive_persistent.py"
-remote_copy_to "$repo_root/train/methods/adaptive_power_tempered.py" "$REMOTE_REPO_PATH/train/methods/adaptive_power_tempered.py"
-remote_copy_to "$repo_root/train/methods/base.py" "$REMOTE_REPO_PATH/train/methods/base.py"
-remote_copy_to "$repo_root/train/methods/quasi_random.py" "$REMOTE_REPO_PATH/train/methods/quasi_random.py"
-remote_copy_to "$repo_root/train/methods/rad.py" "$REMOTE_REPO_PATH/train/methods/rad.py"
-remote_copy_to "$repo_root/train/methods/random.py" "$REMOTE_REPO_PATH/train/methods/random.py"
-remote_copy_to "$repo_root/train/methods/sampling.py" "$REMOTE_REPO_PATH/train/methods/sampling.py"
-remote_copy_to "$repo_root/train/problems/__init__.py" "$REMOTE_REPO_PATH/train/problems/__init__.py"
-remote_copy_to "$repo_root/train/problems/base.py" "$REMOTE_REPO_PATH/train/problems/base.py"
-remote_copy_to "$repo_root/train/problems/advection_diffusion.py" "$REMOTE_REPO_PATH/train/problems/advection_diffusion.py"
+for local_path in "$repo_root"/train/methods/*.py; do
+  remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/methods/$(basename "$local_path")"
+done
+for local_path in "$repo_root"/train/problems/*.py; do
+  remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/problems/$(basename "$local_path")"
+done
 
 submit_seed() {
   local seed="$1"
