@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--problem-kwargs JSON]
+  submit_m3_large_cpu_advection_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--problem-kwargs JSON] [--session-prefix NAME] [--skip-setup]
 
 Description:
   Submit an advection-diffusion screen confirm study on m3-large-cpu
@@ -22,6 +22,8 @@ config_file=""
 sync_root=""
 reference_mesh_factor="0.05"
 problem_kwargs='{}'
+session_prefix="cpu-advection-screen"
+skip_setup=false
 seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066,7077,8088,9099,11111,12121,13131,14141,15151,16161,17171"
 # Paper-facing default suite. Negative/tuning variants remain selectable via
 # --methods, but are intentionally not included by default.
@@ -73,6 +75,14 @@ while [[ $# -gt 0 ]]; do
       problem_kwargs="$2"
       shift 2
       ;;
+    --session-prefix)
+      session_prefix="$2"
+      shift 2
+      ;;
+    --skip-setup)
+      skip_setup=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -118,37 +128,41 @@ if [[ -n "${REMOTE_VENV_PATH:-}" ]]; then
   ld_prefix="LD_LIBRARY_PATH=$REMOTE_VENV_PATH/lib:\${LD_LIBRARY_PATH:-} "
 fi
 
-echo "[submit] bootstrapping remote repo"
-CONFIG_FILE="$config_file" "$remote_ops_dir/bootstrap_remote.sh"
+if [[ "$skip_setup" != true ]]; then
+  echo "[submit] bootstrapping remote repo"
+  CONFIG_FILE="$config_file" "$remote_ops_dir/bootstrap_remote.sh"
 
-echo "[submit] pinning remote repo to commit $commit_sha"
-remote_exec "
-  set -euo pipefail
-  cd '$REMOTE_REPO_PATH'
-  git fetch --all --prune
-  git checkout '$commit_sha'
-  mkdir -p '$REMOTE_REPO_PATH/.remote_opps/logs'
-"
+  echo "[submit] pinning remote repo to commit $commit_sha"
+  remote_exec "
+    set -euo pipefail
+    cd '$REMOTE_REPO_PATH'
+    git fetch --all --prune
+    git checkout '$commit_sha'
+    mkdir -p '$REMOTE_REPO_PATH/.remote_opps/logs'
+  "
 
-echo "[submit] syncing local advection overlay"
-remote_copy_to "$repo_root/train/config.py" "$REMOTE_REPO_PATH/train/config.py"
-remote_copy_to "$repo_root/train/experiments.py" "$REMOTE_REPO_PATH/train/experiments.py"
-remote_copy_to "$repo_root/train/main.py" "$REMOTE_REPO_PATH/train/main.py"
-remote_copy_to "$repo_root/train/mesh_refinement.py" "$REMOTE_REPO_PATH/train/mesh_refinement.py"
-remote_copy_to "$repo_root/train/pinn_model.py" "$REMOTE_REPO_PATH/train/pinn_model.py"
-remote_copy_to "$repo_root/train/training.py" "$REMOTE_REPO_PATH/train/training.py"
-remote_copy_to "$repo_root/train/utils.py" "$REMOTE_REPO_PATH/train/utils.py"
-remote_copy_to "$repo_root/train/visualization.py" "$REMOTE_REPO_PATH/train/visualization.py"
-for local_path in "$repo_root"/train/methods/*.py; do
-  remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/methods/$(basename "$local_path")"
-done
-for local_path in "$repo_root"/train/problems/*.py; do
-  remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/problems/$(basename "$local_path")"
-done
+  echo "[submit] syncing local advection overlay"
+  remote_copy_to "$repo_root/train/config.py" "$REMOTE_REPO_PATH/train/config.py"
+  remote_copy_to "$repo_root/train/experiments.py" "$REMOTE_REPO_PATH/train/experiments.py"
+  remote_copy_to "$repo_root/train/main.py" "$REMOTE_REPO_PATH/train/main.py"
+  remote_copy_to "$repo_root/train/mesh_refinement.py" "$REMOTE_REPO_PATH/train/mesh_refinement.py"
+  remote_copy_to "$repo_root/train/pinn_model.py" "$REMOTE_REPO_PATH/train/pinn_model.py"
+  remote_copy_to "$repo_root/train/training.py" "$REMOTE_REPO_PATH/train/training.py"
+  remote_copy_to "$repo_root/train/utils.py" "$REMOTE_REPO_PATH/train/utils.py"
+  remote_copy_to "$repo_root/train/visualization.py" "$REMOTE_REPO_PATH/train/visualization.py"
+  for local_path in "$repo_root"/train/methods/*.py; do
+    remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/methods/$(basename "$local_path")"
+  done
+  for local_path in "$repo_root"/train/problems/*.py; do
+    remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/problems/$(basename "$local_path")"
+  done
+else
+  echo "[submit] skipping remote setup; using existing repo at $REMOTE_REPO_PATH"
+fi
 
 submit_seed() {
   local seed="$1"
-  local session="cpu-advection-screen-seed${seed}"
+  local session="${session_prefix}-seed${seed}"
   local remote_log="$REMOTE_REPO_PATH/.remote_opps/logs/${session}.log"
   local remote_runner="$REMOTE_REPO_PATH/.remote_opps/run_${session}.sh"
   local local_runner="$runner_dir/${session}.sh"
