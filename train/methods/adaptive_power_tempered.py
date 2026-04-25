@@ -34,6 +34,7 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         beta_min: float = 1.0,
         beta_max: float = 4.0,
         coverage_area_exponent: float = 0.5,
+        coverage_floor: float = 0.0,
         warmup_iterations: int = 1,
         **kwargs: Any,
     ) -> None:
@@ -41,6 +42,7 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         self.beta_min = float(beta_min)
         self.beta_max = max(float(beta_max), self.beta_min)
         self.coverage_area_exponent = float(coverage_area_exponent)
+        self.coverage_floor = float(np.clip(coverage_floor, 0.0, 1.0))
         self.warmup_iterations = max(0, int(warmup_iterations))
         self._active_iteration = 0
         self._last_tempering_stats: dict[str, float] = {}
@@ -123,6 +125,7 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
     ) -> None:
         areas = np.nan_to_num(np.asarray(areas, dtype=float), nan=0.0)
         areas = np.clip(areas, 1e-12, None)
+        true_area_probs = areas / np.sum(areas)
         area_weights = np.power(areas, self.coverage_area_exponent)
         area_probs = area_weights / np.sum(area_weights)
 
@@ -141,21 +144,33 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         tilt = np.exp(beta * (z - float(np.max(z)) if len(z) else z))
         weights = area_weights * tilt
         if float(np.sum(weights)) <= 0.0 or not np.all(np.isfinite(weights)):
-            probs = area_probs
+            power_probs = area_probs
         else:
-            probs = weights / np.sum(weights)
+            power_probs = weights / np.sum(weights)
+
+        if self.coverage_floor > 0.0:
+            probs = (
+                (1.0 - self.coverage_floor) * power_probs
+                + self.coverage_floor * true_area_probs
+            )
+            probs = probs / np.sum(probs)
+        else:
+            probs = power_probs
 
         self._sampling_state = {
             "triangles": triangles,
             "areas": areas,
             "adaptive_probs": probs,
             "area_probs": area_probs,
+            "true_area_probs": true_area_probs,
+            "unfloored_power_tempered_probs": power_probs,
             "power_tempered_probs": probs,
         }
         self._last_tempering_stats = {
             "tempering_beta": float(beta),
             "residual_concentration": float(concentration),
             "normalized_entropy": float(normalized_entropy),
+            "coverage_floor": float(self.coverage_floor),
         }
 
     @staticmethod
@@ -291,11 +306,12 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
             "score_exponent": float(self.score_exponent),
             "area_exponent": float(self.area_exponent),
             "coverage_area_exponent": float(self.coverage_area_exponent),
-            "global_coverage_fraction": 0.0,
+            "global_coverage_fraction": float(self.coverage_floor),
             "smoothing_lambda": float(self.smoothing_lambda),
             "persistence_alpha": float(self.persistence_alpha),
             "beta_min": float(self.beta_min),
             "beta_max": float(self.beta_max),
+            "coverage_floor": float(self.coverage_floor),
             "warmup_iterations": int(self.warmup_iterations),
             "sampling_indicator": "power_tempered_rank_persistent_residual",
             "refinement_indicator": "current_smoothed_residual",
@@ -317,6 +333,7 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
                 "beta_min": float(self.beta_min),
                 "beta_max": float(self.beta_max),
                 "coverage_area_exponent": float(self.coverage_area_exponent),
+                "coverage_floor": float(self.coverage_floor),
                 "warmup_iterations": int(self.warmup_iterations),
             }
         )
@@ -342,3 +359,27 @@ class AdaptivePowerTemperedBeta30Method(AdaptivePowerTemperedMethod):
 
     def __init__(self, *args: Any, beta_max: float = 3.0, **kwargs: Any) -> None:
         super().__init__(*args, beta_max=beta_max, **kwargs)
+
+
+class AdaptivePowerTemperedFloor15Method(AdaptivePowerTemperedMethod):
+    """Power-tempered sampler with a 15% true-area coverage floor."""
+
+    name = "adaptive_power_tempered_floor15"
+    description = "Power-tempered adaptive residual sampling (coverage_floor=0.15)"
+
+    def __init__(
+        self, *args: Any, coverage_floor: float = 0.15, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, coverage_floor=coverage_floor, **kwargs)
+
+
+class AdaptivePowerTemperedFloor25Method(AdaptivePowerTemperedMethod):
+    """Power-tempered sampler with a 25% true-area coverage floor."""
+
+    name = "adaptive_power_tempered_floor25"
+    description = "Power-tempered adaptive residual sampling (coverage_floor=0.25)"
+
+    def __init__(
+        self, *args: Any, coverage_floor: float = 0.25, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, coverage_floor=coverage_floor, **kwargs)

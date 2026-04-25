@@ -57,6 +57,8 @@ MESH_REFINEMENT_METHODS = {
     "adaptive_power_tempered",
     "adaptive_power_tempered_beta25",
     "adaptive_power_tempered_beta30",
+    "adaptive_power_tempered_floor15",
+    "adaptive_power_tempered_floor25",
     "adaptive_hybrid_anchor",
 }
 
@@ -303,13 +305,25 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         "adaptive_power_tempered",
         "adaptive_power_tempered_beta25",
         "adaptive_power_tempered_beta30",
+        "adaptive_power_tempered_floor15",
+        "adaptive_power_tempered_floor25",
     }:
         beta_max_by_method = {
             "adaptive_power_tempered": 4.0,
             "adaptive_power_tempered_beta25": 2.5,
             "adaptive_power_tempered_beta30": 3.0,
+            "adaptive_power_tempered_floor15": 4.0,
+            "adaptive_power_tempered_floor25": 4.0,
+        }
+        coverage_floor_by_method = {
+            "adaptive_power_tempered": 0.0,
+            "adaptive_power_tempered_beta25": 0.0,
+            "adaptive_power_tempered_beta30": 0.0,
+            "adaptive_power_tempered_floor15": 0.15,
+            "adaptive_power_tempered_floor25": 0.25,
         }
         beta_max = beta_max_by_method[method_name]
+        coverage_floor = coverage_floor_by_method[method_name]
         method = get_method(
             method_name,
             refinement_threshold=MESH_CONFIG["refinement_threshold"],
@@ -319,11 +333,12 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
             beta_min=1.0,
             beta_max=beta_max,
             coverage_area_exponent=0.5,
+            coverage_floor=coverage_floor,
             warmup_iterations=1,
         )
         method.description = (
             f"Power-tempered rank-persistent adaptive residual sampling "
-            f"(beta_max={beta_max:g})"
+            f"(beta_max={beta_max:g}, coverage_floor={coverage_floor:g})"
         )
     elif method_name == "adaptive_hybrid_anchor":
         method = get_method(
