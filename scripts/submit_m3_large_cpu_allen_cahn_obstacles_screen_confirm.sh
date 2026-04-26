@@ -4,10 +4,10 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_allen_cahn_obstacles_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--mesh-size X]
+  submit_m3_large_cpu_allen_cahn_obstacles_screen_confirm.sh [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--mesh-size X] [--session-prefix NAME] [--skip-setup]
 
 Description:
-  Submit a 10-seed Allen-Cahn obstacles screen confirm study on m3-large-cpu
+  Submit an Allen-Cahn obstacles screen confirm study on m3-large-cpu
   for adaptive_power_tempered, adaptive_halton_base, adaptive_persistent,
   adaptive, random, halton, and rad.
 EOF
@@ -22,7 +22,9 @@ commit_sha="$(git rev-parse origin/codex/navier-stokes-channel-obstacle)"
 config_file=""
 sync_root=""
 reference_mesh_factor="0.05"
-seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066"
+session_prefix="cpu-allen-cahn-screen"
+skip_setup=false
+seeds_csv="42,123,456,789,1011,2022,3033,4044,5055,6066,7077,8088,9099,11111,12121,13131,14141,15151,16161,17171"
 # Paper-facing default suite. Negative/tuning variants remain selectable via
 # --methods, but are intentionally not included by default.
 methods_csv="adaptive_power_tempered,adaptive_halton_base,adaptive_persistent,adaptive,random,halton,rad"
@@ -73,6 +75,14 @@ while [[ $# -gt 0 ]]; do
       reference_mesh_factor="$2"
       shift 2
       ;;
+    --session-prefix)
+      session_prefix="$2"
+      shift 2
+      ;;
+    --skip-setup)
+      skip_setup=true
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -118,48 +128,41 @@ if [[ -n "${REMOTE_VENV_PATH:-}" ]]; then
   ld_prefix="LD_LIBRARY_PATH=$REMOTE_VENV_PATH/lib:\${LD_LIBRARY_PATH:-} "
 fi
 
-echo "[submit] bootstrapping remote repo"
-CONFIG_FILE="$config_file" "$remote_ops_dir/bootstrap_remote.sh"
+if [[ "$skip_setup" != true ]]; then
+  echo "[submit] bootstrapping remote repo"
+  CONFIG_FILE="$config_file" "$remote_ops_dir/bootstrap_remote.sh"
 
-echo "[submit] pinning remote repo to commit $commit_sha"
-remote_exec "
-  set -euo pipefail
-  cd '$REMOTE_REPO_PATH'
-  git fetch --all --prune
-  git checkout '$commit_sha'
-  mkdir -p '$REMOTE_REPO_PATH/.remote_opps/logs'
-  rm -f '$REMOTE_REPO_PATH/train/problems/allen_cahn_obstacles_2d.py'
-"
+  echo "[submit] pinning remote repo to commit $commit_sha"
+  remote_exec "
+    set -euo pipefail
+    cd '$REMOTE_REPO_PATH'
+    git fetch --all --prune
+    git checkout '$commit_sha'
+    mkdir -p '$REMOTE_REPO_PATH/.remote_opps/logs'
+  "
 
-echo "[submit] syncing local Allen-Cahn overlay"
-remote_copy_to "$repo_root/train/experiments.py" "$REMOTE_REPO_PATH/train/experiments.py"
-remote_copy_to "$repo_root/train/main.py" "$REMOTE_REPO_PATH/train/main.py"
-remote_copy_to "$repo_root/train/mesh_refinement.py" "$REMOTE_REPO_PATH/train/mesh_refinement.py"
-remote_copy_to "$repo_root/train/pinn_model.py" "$REMOTE_REPO_PATH/train/pinn_model.py"
-remote_copy_to "$repo_root/train/methods/__init__.py" "$REMOTE_REPO_PATH/train/methods/__init__.py"
-remote_copy_to "$repo_root/train/methods/adaptive.py" "$REMOTE_REPO_PATH/train/methods/adaptive.py"
-remote_copy_to "$repo_root/train/methods/adaptive_entropy_balanced.py" "$REMOTE_REPO_PATH/train/methods/adaptive_entropy_balanced.py"
-remote_copy_to "$repo_root/train/methods/adaptive_halton_base.py" "$REMOTE_REPO_PATH/train/methods/adaptive_halton_base.py"
-remote_copy_to "$repo_root/train/methods/adaptive_persistent.py" "$REMOTE_REPO_PATH/train/methods/adaptive_persistent.py"
-remote_copy_to "$repo_root/train/methods/adaptive_power_tempered.py" "$REMOTE_REPO_PATH/train/methods/adaptive_power_tempered.py"
-remote_copy_to "$repo_root/train/methods/base.py" "$REMOTE_REPO_PATH/train/methods/base.py"
-remote_copy_to "$repo_root/train/methods/quasi_random.py" "$REMOTE_REPO_PATH/train/methods/quasi_random.py"
-remote_copy_to "$repo_root/train/methods/rad.py" "$REMOTE_REPO_PATH/train/methods/rad.py"
-remote_copy_to "$repo_root/train/methods/random.py" "$REMOTE_REPO_PATH/train/methods/random.py"
-remote_copy_to "$repo_root/train/methods/sampling.py" "$REMOTE_REPO_PATH/train/methods/sampling.py"
-remote_copy_to "$repo_root/train/problems/__init__.py" "$REMOTE_REPO_PATH/train/problems/__init__.py"
-remote_copy_to "$repo_root/train/problems/base.py" "$REMOTE_REPO_PATH/train/problems/base.py"
-remote_copy_to "$repo_root/train/problems/allen_cahn_obstacles_2d.py" "$REMOTE_REPO_PATH/train/problems/allen_cahn_obstacles_2d.py"
-if [[ -f "$repo_root/train/problems/poisson_ring.py" ]]; then
-  remote_copy_to "$repo_root/train/problems/poisson_ring.py" "$REMOTE_REPO_PATH/train/problems/poisson_ring.py"
-fi
-if [[ -f "$repo_root/train/problems/poisson_ring_hard.py" ]]; then
-  remote_copy_to "$repo_root/train/problems/poisson_ring_hard.py" "$REMOTE_REPO_PATH/train/problems/poisson_ring_hard.py"
+  echo "[submit] syncing local Allen-Cahn overlay"
+  remote_copy_to "$repo_root/train/config.py" "$REMOTE_REPO_PATH/train/config.py"
+  remote_copy_to "$repo_root/train/experiments.py" "$REMOTE_REPO_PATH/train/experiments.py"
+  remote_copy_to "$repo_root/train/main.py" "$REMOTE_REPO_PATH/train/main.py"
+  remote_copy_to "$repo_root/train/mesh_refinement.py" "$REMOTE_REPO_PATH/train/mesh_refinement.py"
+  remote_copy_to "$repo_root/train/pinn_model.py" "$REMOTE_REPO_PATH/train/pinn_model.py"
+  remote_copy_to "$repo_root/train/training.py" "$REMOTE_REPO_PATH/train/training.py"
+  remote_copy_to "$repo_root/train/utils.py" "$REMOTE_REPO_PATH/train/utils.py"
+  remote_copy_to "$repo_root/train/visualization.py" "$REMOTE_REPO_PATH/train/visualization.py"
+  for local_path in "$repo_root"/train/methods/*.py; do
+    remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/methods/$(basename "$local_path")"
+  done
+  for local_path in "$repo_root"/train/problems/*.py; do
+    remote_copy_to "$local_path" "$REMOTE_REPO_PATH/train/problems/$(basename "$local_path")"
+  done
+else
+  echo "[submit] skipping remote setup; using existing repo at $REMOTE_REPO_PATH"
 fi
 
 submit_seed() {
   local seed="$1"
-  local session="cpu-allen-cahn-screen-seed${seed}"
+  local session="${session_prefix}-seed${seed}"
   local remote_log="$REMOTE_REPO_PATH/.remote_opps/logs/${session}.log"
   local remote_runner="$REMOTE_REPO_PATH/.remote_opps/run_${session}.sh"
   local local_runner="$runner_dir/${session}.sh"
@@ -181,6 +184,9 @@ export OPENBLAS_NUM_THREADS=$threads_per_job
 export NUMEXPR_NUM_THREADS=$threads_per_job
 export VECLIB_MAXIMUM_THREADS=$threads_per_job
 export NGS_NUM_THREADS=$threads_per_job
+export PINN_RUN_TAG_SUFFIX='$session_prefix'
+
+VALIDATION_OPTIONS='{"restore_best_epoch_checkpoint": false}'
 
 set +e
 ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
@@ -192,7 +198,8 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --iterations $iterations \\
   --epochs $epochs \\
   --mesh-size $mesh_size \\
-  --reference-mesh-factor $reference_mesh_factor
+  --reference-mesh-factor $reference_mesh_factor \\
+  --validation-options "\$VALIDATION_OPTIONS"
 rc=\$?
 set -e
 
