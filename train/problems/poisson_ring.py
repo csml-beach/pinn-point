@@ -41,15 +41,31 @@ class PoissonRingProblem(PDEProblem):
         inner_radius: float = 0.65,
         inner_center_x: float = 0.38,
         inner_center_y: float = -0.22,
+        source_amplitude_scale: float = 1.0,
+        source_sigma_scale: float = 1.0,
     ):
         self.outer_radius = float(outer_radius)
         self.inner_radius = float(inner_radius)
         self.inner_center_x = float(inner_center_x)
         self.inner_center_y = float(inner_center_y)
+        self.source_amplitude_scale = float(source_amplitude_scale)
+        self.source_sigma_scale = float(source_sigma_scale)
+
+    def _scaled_bumps(self):
+        sigma_scale = max(self.source_sigma_scale, 1e-8)
+        return tuple(
+            (
+                x0,
+                y0,
+                amplitude * self.source_amplitude_scale,
+                sigma * sigma_scale,
+            )
+            for x0, y0, amplitude, sigma in self._BUMPS
+        )
 
     def _source_term_torch(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         source = torch.zeros_like(x)
-        for x0, y0, amplitude, sigma in self._BUMPS:
+        for x0, y0, amplitude, sigma in self._scaled_bumps():
             radius_sq = (x - x0) ** 2 + (y - y0) ** 2
             source = source + amplitude * torch.exp(
                 -radius_sq / (2.0 * sigma * sigma)
@@ -58,7 +74,7 @@ class PoissonRingProblem(PDEProblem):
 
     def _source_term_ngsolve(self):
         source = 0
-        for x0, y0, amplitude, sigma in self._BUMPS:
+        for x0, y0, amplitude, sigma in self._scaled_bumps():
             radius_sq = (x - x0) * (x - x0) + (y - y0) * (y - y0)
             source = source + amplitude * exp(-radius_sq / (2.0 * sigma * sigma))
         return source

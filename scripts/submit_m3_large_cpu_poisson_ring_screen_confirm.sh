@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_poisson_ring_screen_confirm.sh [--problem NAME] [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--session-prefix NAME] [--skip-setup]
+  submit_m3_large_cpu_poisson_ring_screen_confirm.sh [--problem NAME] [--problem-kwargs JSON] [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--session-prefix NAME] [--skip-setup]
 
 Description:
   Submit a Poisson-style screen confirm study on m3-large-cpu.
@@ -12,6 +12,7 @@ EOF
 }
 
 problem_name="poisson_ring"
+problem_kwargs='{}'
 parallel_jobs=10
 threads_per_job=1
 epochs=400
@@ -29,6 +30,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --problem)
       problem_name="$2"
+      shift 2
+      ;;
+    --problem-kwargs)
+      problem_kwargs="$2"
       shift 2
       ;;
     --parallel)
@@ -189,6 +194,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --device cpu \\
   screen \\
   --problem $problem_name \\
+  --problem-kwargs '$problem_kwargs' \\
   --methods $methods_csv \\
   --seed $seed \\
   --epochs $epochs \\
