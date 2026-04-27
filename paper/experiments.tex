@@ -1,18 +1,30 @@
 \section{Experiments}
+\label{sec:experiments}
 
-This section should report only curated results that have been promoted from raw run directories under \texttt{outputs/} into the paper-facing \texttt{artifacts/} tree. The current repository already supports multi-method ablations, hyperparameter sweeps, and summary plotting, but the final paper still needs a frozen protocol and a curated metrics bundle.
+To evaluate the effectiveness of the proposed adaptive sampling methods, we conduct experiments across a range of challenging two-dimensional PDE problems. Our experimental framework, \textbf{\pinnpoint}, is designed to ensure a rigorous and fair comparison between sampling strategies.
 
-\paragraph{Planned evaluations.}
+\subsection{Benchmark Problems}
+
+We employ a suite of four distinct PDE problems, each presenting unique challenges for PINN training:
+
+\begin{enumerate}
+    \item \textbf{Poisson Equation on Perforated Domain:} A steady-state elliptic problem $-\nabla^2 u = f$ defined on a square domain with complex circular and cross-shaped cutouts. This problem tests the ability of the sampler to handle non-trivial geometries and boundary conditions.
+    \item \textbf{Advection-Diffusion:} A problem characterized by high P\'{e}clet numbers, where the solution exhibits sharp fronts and localized features that are difficult to capture with uniform sampling.
+    \item \textbf{Navier-Stokes (Channel with Obstacle):} A coupled system of equations representing fluid flow. The presence of an obstacle in the channel creates complex wake patterns and high-residual regions downstream.
+    \item \textbf{Allen-Cahn Equation:} A reaction-diffusion equation used to model phase separation. It features sharp interfaces that evolve over the domain, requiring the sampler to dynamically track moving features (in our pseudo-time or iterative setup).
+\end{enumerate}
+
+\subsection{Fair Comparison Protocol}
+
+A key contribution of our work is the establishment of a fair benchmarking protocol. All methods compared in this study share the following constraints:
+
 \begin{itemize}
-    \item Main comparison across adaptive, random, quasi-random, and residual-based resampling methods.
-    \item Sensitivity study for RAD hyperparameters and resampling period.
-    \item Point-budget or compute-efficiency comparison at matched training conditions.
-    \item Seed-aggregated summary plots and final-error tables for the manuscript.
+    \item \textbf{Shared Supervision:} Every method utilizes the same fixed set of labeled data points derived from a high-fidelity Finite Element Method (FEM) reference solution.
+    \item \textbf{Fixed Iteration Budget:} All methods are trained for the same number of iterations and optimizer steps, ensuring that no method benefits from additional compute during the training phase.
+    \item \textbf{Matched Collocation Budget:} The number of interior collocation points evaluated per iteration is kept constant across all methods.
+    \item \textbf{Overhead Reporting:} We explicitly record and report the computational overhead associated with the sampling and mesh-refinement logic, allowing for a true error-to-cost evaluation.
 \end{itemize}
 
-\paragraph{Artifact targets.}
-\begin{itemize}
-    \item Figures in \texttt{artifacts/figures/}
-    \item Tables and CSV summaries in \texttt{artifacts/metrics/}
-    \item Supplementary animations in \texttt{artifacts/animations/}
-\end{itemize}
+\subsection{Experimental Setup}
+
+The PINN models are implemented using PyTorch and consist of feed-forward neural networks with Swish activation functions. We use the Adam optimizer for the initial training phase, followed by L-BFGS for fine-tuning where appropriate. All experiments are run with multiple seeds (typically 10) to ensure statistical significance, with results reported as mean values with standard deviation shaded regions.

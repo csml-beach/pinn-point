@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  submit_m3_large_cpu_poisson_ring_screen_confirm.sh [--problem NAME] [--problem-kwargs JSON] [--parallel N] [--threads N] [--epochs N] [--iterations N] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--session-prefix NAME] [--skip-setup]
+  submit_m3_large_cpu_poisson_ring_screen_confirm.sh [--problem NAME] [--problem-kwargs JSON] [--parallel N] [--threads N] [--epochs N] [--iterations N] [--mesh-size F] [--seeds CSV] [--methods CSV] [--commit SHA] [--config PATH] [--sync-root PATH] [--reference-mesh-factor X] [--session-prefix NAME] [--skip-setup]
 
 Description:
   Submit a Poisson-style screen confirm study on m3-large-cpu.
@@ -17,6 +17,7 @@ parallel_jobs=10
 threads_per_job=1
 epochs=400
 iterations=8
+mesh_size=""
 commit_sha="$(git rev-parse origin/codex/navier-stokes-channel-obstacle)"
 config_file=""
 sync_root=""
@@ -50,6 +51,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --iterations)
       iterations="$2"
+      shift 2
+      ;;
+    --mesh-size)
+      mesh_size="$2"
       shift 2
       ;;
     --seeds)
@@ -138,6 +143,8 @@ if [[ "$skip_setup" != true ]]; then
     set -euo pipefail
     cd '$REMOTE_REPO_PATH'
     git fetch --all --prune
+    git reset --hard HEAD
+    git clean -f
     git checkout '$commit_sha'
     mkdir -p '$REMOTE_REPO_PATH/.remote_opps/logs'
   "
@@ -198,7 +205,7 @@ ${env_prefix}${ld_prefix}PYTHONUNBUFFERED=1 '$REMOTE_PYTHON' train/main.py \\
   --methods $methods_csv \\
   --seed $seed \\
   --epochs $epochs \\
-  --iterations $iterations \\
+  --iterations $iterations ${mesh_size:+--mesh-size $mesh_size} \\
   --reference-mesh-factor $reference_mesh_factor \\
   --validation-options "\$VALIDATION_OPTIONS"
 rc=\$?

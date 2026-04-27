@@ -3,6 +3,16 @@
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{cleveref}
+\usepackage{subcaption}
+\usepackage{xspace}
+
+\newcommand{\pinnpoint}{PINN-Point\xspace}
+
+\newif\ifblindsubmission
+\blindsubmissiontrue % set to \blindsubmissionfalse for non-blind version
 
 \journal{TBD}
 
@@ -10,15 +20,22 @@
 
 \begin{frontmatter}
 
-\title{PINN-Point: Adaptive Collocation Strategies for Physics-Informed Neural Networks on Complex 2D Geometries}
+\title{\pinnpoint: Adaptive Collocation Strategies for Physics-Informed Neural Networks on Complex 2D Geometries}
 
-\author{Author Name}
-\address{Affiliation}
+\ifblindsubmission
+\author{Anonymous Author(s)}
+\address{Anonymous Institution}
+\else
+\author[inst1]{Arash Sarshar\corref{cor1}}
+\ead{arash.sarshar@csulb.edu}
+\cortext[cor1]{Corresponding author}
+\address[inst1]{Department of Computer Engineering and Computer Science, California State University, Long Beach, 90840, CA, USA}
+\fi
 
 \input{abstract}
 
 \begin{keyword}
-physics-informed neural networks \sep adaptive mesh refinement \sep collocation sampling \sep Poisson equation
+physics-informed neural networks \sep adaptive sampling \sep residual-guided collocation \sep complex geometry \sep mesh-scaffold \sep entropy-balanced sampling
 \end{keyword}
 
 \end{frontmatter}
@@ -26,7 +43,13 @@ physics-informed neural networks \sep adaptive mesh refinement \sep collocation 
 \input{introduction}
 \input{method}
 \input{experiments}
+\input{results}
 \input{conclusions}
+\input{data_availability}
+\ifblindsubmission
+\else
+\input{acknowledgments}
+\fi
 \input{references}
 
 \end{document}
