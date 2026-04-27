@@ -6,9 +6,9 @@
 
 **PINN-Point** is a research project comparing Physics-Informed Neural Networks (PINNs) trained with:
 - **Adaptive residual-guided sampling** — refines a mesh scaffold, then allocates a fixed interior collocation budget inside high-residual elements
-- **Baseline and competitive samplers** — including random, low-discrepancy, residual-based fixed-mesh methods, and a hybrid anchor-guided adaptive method
+- **Baseline and competitive samplers** — including random, low-discrepancy (Halton/Sobol), residual-based (RAD), and a family of power-tempered and persistent adaptive variants
 
-The core experiment idea is a **fair comparison**: all methods share the same labeled coarse-mesh FEM data, reference solution, initial weights, and a fixed interior collocation budget per iteration, isolating the effect of collocation point selection and refinement policy. The active comparison policy also uses the same configured training budget per iteration for every method, disables adaptive-only bonus training, and records runtime with method-specific sampling/refinement overhead included.
+All methods share the same labeled coarse-mesh FEM data, reference solution, initial weights, and a fixed interior collocation budget per iteration, isolating the effect of collocation point selection. Runtime includes method-specific sampling/refinement overhead.
 
 ## Directory Structure
 
@@ -29,21 +29,33 @@ pinn-point/
 │   ├── problems/            # Extensible PDE definitions
 │   │   ├── __init__.py      # Problem registry, get_problem()
 │   │   ├── base.py          # Abstract PDEProblem class
-│   │   └── poisson.py       # Poisson equation implementation
+│   │   ├── poisson.py       # Poisson on perforated square
+│   │   ├── poisson_ring.py  # Poisson on eccentric annulus
+│   │   ├── poisson_ring_hard.py  # Poisson on multi-hole annulus (thin corridors)
+│   │   ├── advection_diffusion.py        # Advection-diffusion PDE
+│   │   ├── allen_cahn_obstacles_2d.py    # Allen-Cahn with 2D obstacle geometry
+│   │   └── navier_stokes_channel_obstacle.py  # Navier-Stokes channel with obstacle
 │   └── methods/             # Extensible training methods
 │       ├── __init__.py      # Method registry, get_method()
 │       ├── base.py          # Abstract TrainingMethod class
 │       ├── adaptive.py      # Residual-guided interior sampling on a refined scaffold
+│       ├── adaptive_persistent.py        # Adaptive with persistent point retention
+│       ├── adaptive_power_tempered.py    # Power-tempered residual weighting (main variant)
+│       ├── adaptive_entropy_balanced.py  # Entropy-regularised adaptive sampling
+│       ├── adaptive_halton_base.py       # Halton-seeded adaptive scaffold
 │       ├── hybrid_anchor.py # Residual + anchor-error adaptive refinement
 │       ├── random.py        # Uniform random sampling
 │       ├── quasi_random.py  # Halton and Sobol low-discrepancy methods
-│       ├── rad.py           # Residual-based Adaptive Distribution
+│       ├── rad.py           # Residual-based Adaptive Distribution (RAD)
 │       └── sampling.py      # Shared point-sampling helpers
+├── scripts/                 # Submission and analysis scripts
+│   ├── submit_m3_cpu_xl_poisson_sweep.sh  # 4-flavor Poisson sweep orchestrator
+│   └── compile_elsarticle.sh              # LaTeX build helper
 ├── notebooks/               # Jupyter notebooks for exploration
-├── docs/                    # Documentation (CSV format, parameter study)
-├── outputs/                 # Generated experiment outputs (gitignored)
-├── backup/                  # Old experiment outputs (gitignored)
-└── paper/                   # LaTeX paper files
+├── docs/                    # Documentation and write-ups
+├── outputs/                 # Generated experiment outputs (DVC-tracked)
+├── paper/                   # LaTeX paper source
+└── specs/                   # Experiment spec files (used by remote-ops runner)
 ```
 
 ## Running the Project
@@ -63,16 +75,50 @@ pinn-point/
 - `cleanup` — Remove generated artifacts
 - `cleanup-all` — Remove temporary files from `outputs/`
 
+## Registered Problems
+
+| Name | File | Description |
+|------|------|-------------|
+| `poisson` | `problems/poisson.py` | Poisson on a perforated square with Gaussian sources |
+| `poisson_ring` | `problems/poisson_ring.py` | Poisson on an eccentric annulus (asymmetric sources) |
+| `poisson_ring_hard` | `problems/poisson_ring_hard.py` | Poisson on a multi-hole annulus with thin corridors |
+| `advection_diffusion` | `problems/advection_diffusion.py` | Advection-diffusion with configurable Péclet number |
+| `allen_cahn_obstacles_2d` | `problems/allen_cahn_obstacles_2d.py` | Allen-Cahn phase-field with 2D obstacle geometry |
+| `navier_stokes_channel_obstacle` | `problems/navier_stokes_channel_obstacle.py` | Steady Navier-Stokes in a channel with a circular obstacle |
+
+All problems accept a `problem_kwargs` dict in specs / CLI to control geometry and source parameters.
+
+## Registered Methods
+
+| Name | Description |
+|------|-------------|
+| `random` | Uniform random collocation |
+| `halton` | Halton low-discrepancy sequence |
+| `sobol` | Sobol low-discrepancy sequence |
+| `rad` | Residual-based Adaptive Distribution (RAD) with NaN guards |
+| `adaptive` | Residual-guided refinement scaffold |
+| `adaptive_persistent` | Adaptive with cross-iteration point retention |
+| `adaptive_power_tempered` | Power-tempered residual weighting (recommended adaptive baseline) |
+| `adaptive_power_tempered_beta25` | Power-tempered with β=2.5 |
+| `adaptive_power_tempered_beta30` | Power-tempered with β=3.0 |
+| `adaptive_power_tempered_floor15` | Power-tempered with coverage floor=0.15 |
+| `adaptive_power_tempered_floor25` | Power-tempered with coverage floor=0.25 |
+| `adaptive_entropy_balanced` | Entropy-regularised adaptive sampling |
+| `adaptive_halton_base` | Halton-seeded adaptive scaffold |
+| `adaptive_hybrid_anchor` | Residual + anchor-error hybrid refinement |
+
 ## Key Configuration (train/config.py)
 
 | Config Dict | Purpose |
-|-------------|---------|
+|-------------|--------|
 | `MODEL_CONFIG` | Network architecture, loss weights |
 | `TRAINING_CONFIG` | Epochs, learning rate, iterations |
 | `MESH_CONFIG` | Initial mesh size, refinement threshold |
 | `HYBRID_ADAPTIVE_CONFIG` | Hybrid anchor count, blend weights, normalization quantile, hybrid refinement threshold |
 | `GEOMETRY_CONFIG` | Domain size, shape parameters |
 | `VIZ_CONFIG` | Image sizes, colormaps |
+
+Most of these can be overridden per-run via CLI flags (`--mesh-size`, `--iterations`, `--epochs`) or via `problem_kwargs` in the spec JSON.
 
 ## Adding a New PDE Problem
 
@@ -147,20 +193,52 @@ from .your_method import YourMethod
 METHOD_REGISTRY["your_method"] = YourMethod
 ```
 
-## Current PDE: Poisson Equation
+## Submitting a Sweep
 
-**Equation**: $-\nabla^2 u = f(x,y)$ where $f(x,y) = xy$
+The primary sweep workflow uses SSH + tmux on the remote CPU node. The helper scripts live in `../remote-ops/pinn-point/` (private repo, not committed here).
 
-**Domain**: Perforated square domain with repeated cross/circle cutout patterns, size 5×5
+**Typical flow:**
+```bash
+# 1. Bootstrap the remote once (installs .venv-netgen, clones repo)
+bash ../remote-ops/pinn-point/bootstrap_remote.sh
 
-**Boundary Conditions**: Dirichlet $u = 0$ on bottom boundary
+# 2. Submit a 4-flavor Poisson sweep (10 seeds each, 400 epochs)
+bash scripts/submit_m3_cpu_xl_poisson_sweep.sh \
+  --mesh-size 0.35 \
+  --iterations 12 \
+  --epochs 400
 
-**Active implementation locations**:
-- `train/problems/poisson.py`: Poisson residual, boundary loss, FEM solve, and mesh creation
-- `train/pinn_model.py`: delegates residual and boundary loss through the active `problem`
-- `train/fem_solver.py`: thin helpers that call `problem.solve_fem(...)`
+# 3. Monitor (on remote via SSH)
+ssh m3-cpu-xl 'tmux ls'
 
-The problem abstraction is now on the active training path, but the Poisson problem is still the only built-in PDE and some backend-sensitive FEM details remain under active cleanup.
+# 4. Sync results back locally (runs rsync per flavor/seed)
+bash ../remote-ops/pinn-point/sync.sh --session <session>
+# or use the sweep script's built-in sync by re-running with --sync-only
+```
+
+**Required remote env var** (NGSolve shared libs):
+```bash
+export LD_LIBRARY_PATH=.venv-netgen/lib:${LD_LIBRARY_PATH:-}
+```
+This is set automatically by `bootstrap_remote.sh` and the sweep scripts.
+
+**Sync root convention**: results land under
+`outputs/m3-cpu-xl-poisson-sweep-<epochs>e[-ms<mesh_size>]/<flavor>/<run_id>/`
+
+## Current PDEs
+
+Six PDE problems are registered and production-tested:
+
+| Problem | Geometry | Difficulty driver |
+|---------|----------|------------------|
+| `poisson` | Perforated square | Multiple cutouts |
+| `poisson_ring` | Eccentric annulus | Asymmetric sources + curved boundary |
+| `poisson_ring_hard` | Multi-hole annulus | Thin corridors between 3 holes |
+| `advection_diffusion` | Rectangle | High Péclet number |
+| `allen_cahn_obstacles_2d` | 2D domain with obstacles | Sharp interface + nonlinearity |
+| `navier_stokes_channel_obstacle` | Channel with circular obstacle | Coupled velocity-pressure, inf-sup |
+
+The `poisson_ring` / `poisson_ring_hard` benchmark family has the most experimental results (10-seed sweeps at mesh_size 0.7 and 0.35, 4 source/geometry flavors).
 
 ## Data Flow
 
