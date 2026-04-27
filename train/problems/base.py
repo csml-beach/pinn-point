@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Tuple
 
 import torch
+from torch.utils.data import TensorDataset
 
 
 class PDEProblem(ABC):
@@ -27,10 +28,14 @@ class PDEProblem(ABC):
 
     name: str = "base"
     description: str = "Abstract base PDE problem"
+    input_dim: int = 2
+    output_dim: int = 1
+    output_names: tuple[str, ...] = ("u",)
+    has_time_input: bool = False
 
     @abstractmethod
     def pde_residual(
-        self, model: Any, x: torch.Tensor, y: torch.Tensor
+        self, model: Any, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
     ) -> torch.Tensor:
         """Compute the PDE residual at given points.
 
@@ -38,9 +43,10 @@ class PDEProblem(ABC):
         For a PDE of the form L[u] = f, the residual is L[u] - f.
 
         Args:
-            model: Neural network model with forward(x, y) method
+            model: Neural network model with forward(...) method
             x: x-coordinates (requires_grad=True for autograd)
             y: y-coordinates (requires_grad=True for autograd)
+            t: Optional time coordinates for transient problems
 
         Returns:
             Tensor of residual values at each point
@@ -61,12 +67,15 @@ class PDEProblem(ABC):
         pass
 
     @abstractmethod
-    def source_term(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def source_term(
+        self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor | None = None
+    ) -> torch.Tensor:
         """Evaluate the source term f(x, y) at given points.
 
         Args:
             x: x-coordinates
             y: y-coordinates
+            t: Optional time coordinates for transient problems
 
         Returns:
             Source term values at each point
@@ -111,6 +120,111 @@ class PDEProblem(ABC):
         from geometry import create_initial_mesh
 
         return create_initial_mesh(maxh=maxh)
+
+    def get_time_bounds(self) -> Tuple[float, float] | None:
+        """Return temporal bounds for transient problems, else None."""
+        return None
+
+    def augment_collocation_points(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        *,
+        mesh: Any | None = None,
+        iteration: int = 0,
+        seed: int | None = None,
+        purpose: str = "train",
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Optionally attach extra coordinates (for example time) to collocation points."""
+        return x, y, None
+
+    def get_loss_weight_overrides(self) -> dict[str, float]:
+        """Optional problem-specific overrides for model loss weights."""
+        return {}
+
+    def data_loss(
+        self,
+        model: Any,
+        coordinates: torch.Tensor,
+        targets: torch.Tensor,
+        dataset: TensorDataset | None = None,
+    ) -> torch.Tensor:
+        """Compute supervised loss on problem-owned targets.
+
+        Default behavior is full-output MSE against the provided targets.
+        Problems can override this when only part of the state is supervised.
+        """
+        predictions = model.forward(coordinates)
+        targets = torch.as_tensor(
+            targets,
+            dtype=predictions.dtype,
+            device=predictions.device,
+        )
+        return torch.mean(torch.square(predictions - targets))
+
+    def create_training_dataset(
+        self, mesh, fem_solution: Any | None = None, seed: int | None = None
+    ) -> TensorDataset | None:
+        """Optionally build a problem-specific supervised dataset.
+
+        Returning None falls back to the legacy static scalar dataset path.
+        """
+        return None
+
+    def get_collocation_budget(
+        self,
+        initial_mesh,
+        vertex_array: torch.Tensor,
+        training_dataset: TensorDataset | None = None,
+    ) -> int | None:
+        """Optionally override the fixed accepted collocation budget.
+
+        Returning None falls back to the legacy behavior of using the initial
+        mesh vertex count as the collocation budget.
+        """
+        return None
+
+    def create_smoke_collocation_points(
+        self, mesh, seed: int | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None] | None:
+        """Optionally build problem-specific PINN smoke collocation points.
+
+        Returning None falls back to the legacy mesh-vertex collocation path.
+        """
+        return None
+
+    def create_reference_solution(self, mesh_size_factor: float = 0.05):
+        """Optionally build a problem-specific reference solution payload."""
+        return None
+
+    def build_geometry_smoke_metadata(self, mesh) -> dict[str, Any] | None:
+        """Optionally provide problem-specific geometry-smoke artifacts/metadata."""
+        return None
+
+    def build_fem_smoke_metadata(
+        self,
+        mesh,
+        *,
+        dt: float | None = None,
+        t_end: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Optionally provide problem-specific FEM-smoke artifacts/metadata."""
+        return None
+
+    def evaluate_model_against_reference(
+        self,
+        model: Any,
+        reference_mesh: Any,
+        reference_solution: Any,
+        *,
+        export_images: bool = False,
+        iteration: int | None = None,
+    ) -> bool:
+        """Optionally evaluate a model against a problem-specific reference payload.
+
+        Return True when evaluation was handled by the problem.
+        """
+        return False
 
     def export_fem_solution(self, mesh, gfu) -> torch.Tensor:
         """Evaluate a FEM solution at mesh vertices.

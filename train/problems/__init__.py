@@ -5,7 +5,13 @@ This module provides an extensible framework for defining different PDEs
 that can be solved using Physics-Informed Neural Networks.
 
 Available problems:
-    - PoissonProblem: Poisson equation with source term f(x,y) = x*y
+    - PoissonProblem: Poisson equation with localized source bumps
+    - PoissonRingProblem: eccentric annulus Poisson benchmark
+    - PoissonRingHardProblem: harder Poisson ring control benchmark
+    - AllenCahnObstacles2DProblem: transient Allen-Cahn with interior obstacles
+    - AdvectionDiffusionProblem: steady advection-diffusion-reaction equation
+    - NavierStokesChannelObstacleProblem: geometry-first prototype for a future
+      transient Navier-Stokes benchmark
     
 To add a new problem:
     1. Create a new file in this directory (e.g., heat.py)
@@ -14,7 +20,12 @@ To add a new problem:
     4. Register in this __init__.py
 
 Example:
-    from problems import PoissonProblem
+    from problems import (
+        PoissonProblem,
+        AllenCahnObstacles2DProblem,
+        AdvectionDiffusionProblem,
+        NavierStokesChannelObstacleProblem,
+    )
     
     problem = PoissonProblem()
     residual = problem.pde_residual(model, x, y)
@@ -22,11 +33,21 @@ Example:
 """
 
 from .base import PDEProblem
+from .advection_diffusion import AdvectionDiffusionProblem
+from .allen_cahn_obstacles_2d import AllenCahnObstacles2DProblem
+from .navier_stokes_channel_obstacle import NavierStokesChannelObstacleProblem
 from .poisson import PoissonProblem
+from .poisson_ring import PoissonRingProblem
+from .poisson_ring_hard import PoissonRingHardProblem
 
 # Registry of available problems for CLI/config selection
 PROBLEM_REGISTRY = {
     "poisson": PoissonProblem,
+    "allen_cahn_obstacles_2d": AllenCahnObstacles2DProblem,
+    "poisson_ring": PoissonRingProblem,
+    "poisson_ring_hard": PoissonRingHardProblem,
+    "advection_diffusion": AdvectionDiffusionProblem,
+    "navier_stokes_channel_obstacle": NavierStokesChannelObstacleProblem,
 }
 
 

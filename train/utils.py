@@ -45,69 +45,149 @@ def set_global_seed(seed: int) -> None:
         pass
 
 
-def save_model_checkpoint(model, filepath, additional_info=None):
-    """Save model checkpoint with metadata.
+def build_model_checkpoint(model, additional_info=None):
+    """Build an in-memory checkpoint dictionary for a model."""
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "mesh_x": tensor_to_numpy_safe(model.mesh_x),
+        "mesh_y": tensor_to_numpy_safe(model.mesh_y),
+        "mesh_t": tensor_to_numpy_safe(getattr(model, "mesh_t", torch.empty(0))),
+        "total_error_history": model.total_error_history,
+        "relative_l2_error_history": getattr(model, "relative_l2_error_history", []),
+        "total_error_rms_history": getattr(model, "total_error_rms_history", []),
+        "relative_error_rms_history": getattr(model, "relative_error_rms_history", []),
+        "boundary_error_history": model.boundary_error_history,
+        "train_loss_history": model.train_loss_history,
+        "total_residual_history": model.total_residual_history,
+        "boundary_residual_history": model.boundary_residual_history,
+        "fixed_total_residual_history": getattr(
+            model, "fixed_total_residual_history", []
+        ),
+        "relative_fixed_l2_residual_history": getattr(
+            model, "relative_fixed_l2_residual_history", []
+        ),
+        "fixed_boundary_residual_history": getattr(
+            model, "fixed_boundary_residual_history", []
+        ),
+        "fixed_rms_residual_history": getattr(model, "fixed_rms_residual_history", []),
+        "relative_fixed_rms_residual_history": getattr(
+            model, "relative_fixed_rms_residual_history", []
+        ),
+        "validation_score_history": getattr(model, "validation_score_history", []),
+        "validation_data_loss_history": getattr(
+            model, "validation_data_loss_history", []
+        ),
+        "validation_residual_loss_history": getattr(
+            model, "validation_residual_loss_history", []
+        ),
+        "mesh_point_history": model.mesh_point_history,
+        "mesh_point_count_history": model.mesh_point_count_history,
+        "iteration_point_count_history": getattr(
+            model, "iteration_point_count_history", []
+        ),
+        "iteration_runtime_history": getattr(model, "iteration_runtime_history", []),
+        "cumulative_runtime_history": getattr(model, "cumulative_runtime_history", []),
+        "method_iteration_logs": getattr(model, "method_iteration_logs", []),
+        "selected_iteration_index": getattr(model, "selected_iteration_index", None),
+        "best_validation_score": getattr(model, "best_validation_score", None),
+    }
 
-    Args:
-        model: PINN model
-        filepath: Path to save checkpoint
-        additional_info: Additional information to save
+    if additional_info:
+        checkpoint.update(additional_info)
+    return checkpoint
 
-    Returns:
-        bool: Success status
-    """
+
+def restore_model_state_from_checkpoint(model, checkpoint):
+    """Restore model weights and active collocation points without touching histories."""
+    model.load_state_dict(checkpoint["model_state_dict"])
+    if hasattr(model, "set_mesh_points"):
+        model.set_mesh_points(
+            checkpoint["mesh_x"],
+            checkpoint["mesh_y"],
+            mesh_t=checkpoint.get("mesh_t"),
+        )
+    else:
+        model.mesh_x = torch.tensor(
+            checkpoint["mesh_x"], dtype=torch.float32, device=DEVICE
+        )
+        model.mesh_y = torch.tensor(
+            checkpoint["mesh_y"], dtype=torch.float32, device=DEVICE
+        )
+    model.selected_iteration_index = checkpoint.get("selected_iteration_index")
+    model.best_validation_score = checkpoint.get("best_validation_score")
+
+
+def restore_model_checkpoint_data(model, checkpoint):
+    """Restore a model from an in-memory checkpoint dictionary."""
+    restore_model_state_from_checkpoint(model, checkpoint)
+    model.total_error_history = checkpoint.get("total_error_history", [])
+    model.relative_l2_error_history = checkpoint.get("relative_l2_error_history", [])
+    model.total_error_rms_history = checkpoint.get("total_error_rms_history", [])
+    model.relative_error_rms_history = checkpoint.get("relative_error_rms_history", [])
+    model.boundary_error_history = checkpoint.get("boundary_error_history", [])
+    model.train_loss_history = checkpoint.get("train_loss_history", [])
+    model.total_residual_history = checkpoint.get("total_residual_history", [])
+    model.boundary_residual_history = checkpoint.get("boundary_residual_history", [])
+    model.fixed_total_residual_history = checkpoint.get(
+        "fixed_total_residual_history", []
+    )
+    model.relative_fixed_l2_residual_history = checkpoint.get(
+        "relative_fixed_l2_residual_history", []
+    )
+    model.fixed_boundary_residual_history = checkpoint.get(
+        "fixed_boundary_residual_history", []
+    )
+    model.fixed_rms_residual_history = checkpoint.get("fixed_rms_residual_history", [])
+    model.relative_fixed_rms_residual_history = checkpoint.get(
+        "relative_fixed_rms_residual_history", []
+    )
+    model.validation_score_history = checkpoint.get("validation_score_history", [])
+    model.validation_data_loss_history = checkpoint.get(
+        "validation_data_loss_history", []
+    )
+    model.validation_residual_loss_history = checkpoint.get(
+        "validation_residual_loss_history", []
+    )
+    model.mesh_point_history = checkpoint.get("mesh_point_history", [])
+    model.mesh_point_count_history = checkpoint.get("mesh_point_count_history", [])
+    model.iteration_point_count_history = checkpoint.get(
+        "iteration_point_count_history", []
+    )
+    model.iteration_runtime_history = checkpoint.get("iteration_runtime_history", [])
+    model.cumulative_runtime_history = checkpoint.get("cumulative_runtime_history", [])
+    model.method_iteration_logs = checkpoint.get("method_iteration_logs", [])
+
+
+def get_selected_iteration_index(model):
+    """Return the selected validation checkpoint iteration if present and valid."""
+    idx = getattr(model, "selected_iteration_index", None)
+    if idx is None:
+        return None
     try:
-        checkpoint = {
-            "model_state_dict": model.state_dict(),
-            "mesh_x": tensor_to_numpy_safe(model.mesh_x),
-            "mesh_y": tensor_to_numpy_safe(model.mesh_y),
-            "total_error_history": model.total_error_history,
-            "relative_l2_error_history": getattr(
-                model, "relative_l2_error_history", []
-            ),
-            "total_error_rms_history": getattr(model, "total_error_rms_history", []),
-            "relative_error_rms_history": getattr(
-                model, "relative_error_rms_history", []
-            ),
-            "boundary_error_history": model.boundary_error_history,
-            "train_loss_history": model.train_loss_history,
-            "total_residual_history": model.total_residual_history,
-            "boundary_residual_history": model.boundary_residual_history,
-            "fixed_total_residual_history": getattr(
-                model, "fixed_total_residual_history", []
-            ),
-            "relative_fixed_l2_residual_history": getattr(
-                model, "relative_fixed_l2_residual_history", []
-            ),
-            "fixed_boundary_residual_history": getattr(
-                model, "fixed_boundary_residual_history", []
-            ),
-            "fixed_rms_residual_history": getattr(
-                model, "fixed_rms_residual_history", []
-            ),
-            "relative_fixed_rms_residual_history": getattr(
-                model, "relative_fixed_rms_residual_history", []
-            ),
-            "mesh_point_history": model.mesh_point_history,
-            "mesh_point_count_history": model.mesh_point_count_history,
-            "iteration_point_count_history": getattr(
-                model, "iteration_point_count_history", []
-            ),
-            "iteration_runtime_history": getattr(
-                model, "iteration_runtime_history", []
-            ),
-            "cumulative_runtime_history": getattr(
-                model, "cumulative_runtime_history", []
-            ),
-        }
+        idx = int(idx)
+    except Exception:
+        return None
+    return idx if idx >= 0 else None
 
-        if additional_info:
-            checkpoint.update(additional_info)
 
+def get_selected_history_value(model, history_name: str):
+    """Return the selected-iteration history value, falling back to the last value."""
+    values = getattr(model, history_name, None) or []
+    if not values:
+        return None
+    idx = get_selected_iteration_index(model)
+    if idx is not None and idx < len(values):
+        return values[idx]
+    return values[-1]
+
+
+def save_model_checkpoint(model, filepath, additional_info=None):
+    """Save model checkpoint with metadata."""
+    try:
+        checkpoint = build_model_checkpoint(model, additional_info=additional_info)
         torch.save(checkpoint, filepath)
         print(f"Model checkpoint saved to {filepath}")
         return True
-
     except Exception as e:
         print(f"Error saving checkpoint: {e}")
         return False
@@ -125,58 +205,7 @@ def load_model_checkpoint(model, filepath):
     """
     try:
         checkpoint = torch.load(filepath, map_location=DEVICE)
-
-        model.load_state_dict(checkpoint["model_state_dict"])
-        if hasattr(model, "set_mesh_points"):
-            model.set_mesh_points(checkpoint["mesh_x"], checkpoint["mesh_y"])
-        else:
-            model.mesh_x = torch.tensor(
-                checkpoint["mesh_x"], dtype=torch.float32, device=DEVICE
-            )
-            model.mesh_y = torch.tensor(
-                checkpoint["mesh_y"], dtype=torch.float32, device=DEVICE
-            )
-        model.total_error_history = checkpoint.get("total_error_history", [])
-        model.relative_l2_error_history = checkpoint.get(
-            "relative_l2_error_history", []
-        )
-        model.total_error_rms_history = checkpoint.get("total_error_rms_history", [])
-        model.relative_error_rms_history = checkpoint.get(
-            "relative_error_rms_history", []
-        )
-        model.boundary_error_history = checkpoint.get("boundary_error_history", [])
-        model.train_loss_history = checkpoint.get("train_loss_history", [])
-        model.total_residual_history = checkpoint.get("total_residual_history", [])
-        model.boundary_residual_history = checkpoint.get(
-            "boundary_residual_history", []
-        )
-        model.fixed_total_residual_history = checkpoint.get(
-            "fixed_total_residual_history", []
-        )
-        model.relative_fixed_l2_residual_history = checkpoint.get(
-            "relative_fixed_l2_residual_history", []
-        )
-        model.fixed_boundary_residual_history = checkpoint.get(
-            "fixed_boundary_residual_history", []
-        )
-        model.fixed_rms_residual_history = checkpoint.get(
-            "fixed_rms_residual_history", []
-        )
-        model.relative_fixed_rms_residual_history = checkpoint.get(
-            "relative_fixed_rms_residual_history", []
-        )
-        model.mesh_point_history = checkpoint.get("mesh_point_history", [])
-        model.mesh_point_count_history = checkpoint.get("mesh_point_count_history", [])
-        model.iteration_point_count_history = checkpoint.get(
-            "iteration_point_count_history", []
-        )
-        model.iteration_runtime_history = checkpoint.get(
-            "iteration_runtime_history", []
-        )
-        model.cumulative_runtime_history = checkpoint.get(
-            "cumulative_runtime_history", []
-        )
-
+        restore_model_checkpoint_data(model, checkpoint)
         print(f"Model checkpoint loaded from {filepath}")
         return True
 
@@ -203,7 +232,7 @@ def print_model_summary(model):
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print(
-        f"Architecture: {model.b1.in_features} -> {model.hidden_size} -> {model.hidden_size} -> 1"
+        f"Architecture: {model.b1.in_features} -> {model.hidden_size} -> {model.hidden_size} -> {model.b3.out_features}"
     )
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
@@ -215,20 +244,29 @@ def print_model_summary(model):
     # Training history
     if model.mesh_point_count_history:
         initial_points = model.mesh_point_count_history[0]
-        current_points = model.mesh_point_count_history[-1]
+        current_points = len(model.mesh_x) if hasattr(model, "mesh_x") else initial_points
         refinement_factor = current_points / initial_points if initial_points > 0 else 0
         print(
             f"Mesh refinement: {initial_points:,} -> {current_points:,} (×{refinement_factor:.2f})"
         )
 
-    if model.total_error_history:
-        final_error = model.total_error_history[-1]
-        print(f"Final error integral: {final_error:.6e}")
-    if getattr(model, "relative_l2_error_history", None):
-        print(f"Final relative L2 error: {model.relative_l2_error_history[-1]:.6e}")
-    if getattr(model, "relative_error_rms_history", None):
+    if getattr(model, "selected_iteration_index", None) is not None:
         print(
-            f"Final relative RMS error: {model.relative_error_rms_history[-1]:.6e}"
+            f"Selected validation iteration: {int(model.selected_iteration_index) + 1}"
+        )
+    if getattr(model, "best_validation_score", None) is not None:
+        print(f"Best validation score: {float(model.best_validation_score):.6e}")
+
+    final_error = get_selected_history_value(model, "total_error_history")
+    if final_error is not None:
+        print(f"Final error integral: {final_error:.6e}")
+    final_relative_l2 = get_selected_history_value(model, "relative_l2_error_history")
+    if final_relative_l2 is not None:
+        print(f"Final relative L2 error: {final_relative_l2:.6e}")
+    final_relative_rms = get_selected_history_value(model, "relative_error_rms_history")
+    if final_relative_rms is not None:
+        print(
+            f"Final relative RMS error: {final_relative_rms:.6e}"
         )
 
     if model.train_loss_history:

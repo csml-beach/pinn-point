@@ -182,3 +182,7 @@ cython_debug/
 *.spl
 paper/*.pdf
 /outputs
+
+# Submit scripts (keep only submit_m3_cpu_xl_poisson_sweep.sh)
+scripts/submit_jetstream_*.sh
+scripts/submit_m3_large_cpu_*.sh

@@ -6,6 +6,11 @@ This is the entry point for running the complete experiment.
 import json
 import os
 import sys
+import matplotlib
+import numpy as np
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 def _bootstrap_runtime_from_cli(argv):
@@ -24,7 +29,12 @@ def _bootstrap_runtime_from_cli(argv):
         i += 1
 
     mode = remaining[1].lower() if len(remaining) > 1 else None
-    if device is None and "PINN_DEVICE" not in os.environ and mode == "smoke":
+    if device is None and "PINN_DEVICE" not in os.environ and mode in {
+        "smoke",
+        "geom-smoke",
+        "fem-smoke",
+        "pinn-smoke",
+    }:
         device = "cpu"
 
     if device is not None:
@@ -42,6 +52,12 @@ from config import DEVICE, TRAINING_CONFIG, MESH_CONFIG
 from utils import get_system_info, log_experiment_info, set_global_seed
 from paths import generate_run_id, set_active_run, write_run_metadata, OUTPUTS_ROOT
 from visualization import plot_ablation_error_shaded
+from problems import get_problem, list_problems
+from paths import comparison_images_dir
+from fem_solver import create_dataset, export_fem_solution, solve_FEM
+from geometry import export_vertex_coordinates
+from pinn_model import FeedForward
+from training import train_model
 
 
 SMOKE_DEFAULT_METHODS = ["adaptive", "random"]
@@ -81,6 +97,518 @@ def _parse_methods_arg(raw_value, fallback_methods=None):
     return methods or list(fallback)
 
 
+def _parse_validation_options_arg(raw_value):
+    try:
+        value = json.loads(raw_value)
+    except Exception as e:
+        print(f"Warning: could not parse validation options JSON: {e}")
+        return None
+    if not isinstance(value, dict):
+        print("Warning: validation options must decode to a JSON object")
+        return None
+    return value
+
+
+def _parse_geom_smoke_args(args):
+    options = {
+        "problem_name": "navier_stokes_channel_obstacle",
+        "mesh_size": 0.20,
+        "seed": None,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid mesh size '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed '{args[i + 1]}', ignoring")
+            i += 2
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported geom-smoke arguments: {' '.join(ignored)}")
+    return options
+
+
+def _parse_fem_smoke_args(args):
+    options = {
+        "problem_name": "navier_stokes_channel_obstacle",
+        "mesh_size": 0.20,
+        "dt": None,
+        "t_end": None,
+        "seed": None,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid mesh size '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--dt" and i + 1 < len(args):
+            try:
+                options["dt"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid dt '{args[i + 1]}', using problem default")
+            i += 2
+            continue
+        if arg == "--t-end" and i + 1 < len(args):
+            try:
+                options["t_end"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid t_end '{args[i + 1]}', using problem default")
+            i += 2
+            continue
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed '{args[i + 1]}', ignoring")
+            i += 2
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported fem-smoke arguments: {' '.join(ignored)}")
+    return options
+
+
+def _parse_pinn_smoke_args(args):
+    options = {
+        "problem_name": "navier_stokes_channel_obstacle",
+        "problem_kwargs": None,
+        "mesh_size": 0.35,
+        "epochs": 25,
+        "learning_rate": None,
+        "seed": None,
+    }
+
+    i = 0
+    ignored = []
+    while i < len(args):
+        arg = args[i]
+        if arg == "--problem" and i + 1 < len(args):
+            options["problem_name"] = args[i + 1]
+            i += 2
+            continue
+        if arg == "--problem-kwargs" and i + 1 < len(args):
+            try:
+                options["problem_kwargs"] = json.loads(args[i + 1])
+            except Exception as e:
+                print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        if arg == "--mesh-size" and i + 1 < len(args):
+            try:
+                options["mesh_size"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid mesh size '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--epochs" and i + 1 < len(args):
+            try:
+                options["epochs"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid epochs '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
+            i += 2
+            continue
+        if arg == "--seed" and i + 1 < len(args):
+            try:
+                options["seed"] = int(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid seed '{args[i + 1]}', ignoring")
+            i += 2
+            continue
+        ignored.append(arg)
+        i += 1
+
+    if ignored:
+        print(f"Warning: ignoring unsupported pinn-smoke arguments: {' '.join(ignored)}")
+    return options
+
+
+def _save_mesh_plot(mesh, filename="geometry_mesh.png"):
+    verts = [(float(v.point[0]), float(v.point[1])) for v in mesh.vertices]
+    elements = []
+    for el in mesh.Elements():
+        if getattr(el, "vertices", None) and len(el.vertices) == 3:
+            elements.append([v.nr for v in el.vertices])
+
+    if not verts or not elements:
+        raise RuntimeError("Could not extract triangles from mesh for plotting")
+
+    import matplotlib.tri as mtri
+
+    xy = list(zip(*verts))
+    triang = mtri.Triangulation(xy[0], xy[1], elements)
+    out_path = os.path.join(comparison_images_dir(), filename)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.triplot(triang, color="black", linewidth=0.45)
+    ax.set_aspect("equal")
+    ax.set_title("Geometry mesh")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.grid(False)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def _extract_triangulation(mesh):
+    verts = [(float(v.point[0]), float(v.point[1])) for v in mesh.vertices]
+    triangles = []
+    for el in mesh.Elements():
+        if getattr(el, "vertices", None) and len(el.vertices) == 3:
+            triangles.append([v.nr for v in el.vertices])
+    if not verts or not triangles:
+        raise RuntimeError("Could not extract triangular mesh connectivity")
+    import matplotlib.tri as mtri
+
+    xs, ys = zip(*verts)
+    return verts, mtri.Triangulation(xs, ys, triangles)
+
+
+def _save_scalar_snapshot_plot(mesh, values, title, filename):
+    _, triang = _extract_triangulation(mesh)
+    out_path = os.path.join(comparison_images_dir(), filename)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    tpc = ax.tripcolor(triang, np.asarray(values, dtype=float), shading="gouraud", cmap="viridis")
+    ax.set_aspect("equal")
+    ax.set_title(title)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    fig.colorbar(tpc, ax=ax)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def run_geometry_smoke(problem_name="navier_stokes_channel_obstacle", mesh_size=0.20, seed=None):
+    if seed is not None:
+        set_global_seed(seed)
+
+    tag = f"geom-smoke-{problem_name}"
+    run_id = generate_run_id(tag)
+    set_active_run(run_id)
+
+    print("Running geometry smoke...")
+    print(f"Geometry smoke run ID: {run_id}")
+    print(f"Outputs root: {os.path.join(OUTPUTS_ROOT, run_id)}")
+    print(f"Problem: {problem_name}")
+    print(f"Mesh size: {mesh_size}")
+    print(f"Available problems: {', '.join(list_problems())}")
+
+    problem = get_problem(problem_name)
+    mesh = problem.create_mesh(maxh=mesh_size)
+    smoke_meta = problem.build_geometry_smoke_metadata(mesh)
+    if smoke_meta is None:
+        image_path = _save_mesh_plot(mesh)
+        smoke_meta = {
+            "mesh_plot": image_path,
+            "num_vertices": len(mesh.vertices),
+            "num_elements": len(list(mesh.Elements())),
+        }
+
+    write_run_metadata(
+        extra={
+            "mode": "geom-smoke",
+            "problem_name": problem_name,
+            "mesh_size": mesh_size,
+            **smoke_meta,
+        }
+    )
+
+    print("Geometry smoke completed successfully.")
+    if "num_vertices" in smoke_meta:
+        print(f"Vertices: {smoke_meta['num_vertices']}")
+    if "num_elements" in smoke_meta:
+        print(f"Elements: {smoke_meta['num_elements']}")
+    if "mesh_plot" in smoke_meta:
+        print(f"Mesh plot: {smoke_meta['mesh_plot']}")
+    return run_id
+
+
+def run_fem_smoke(
+    problem_name="navier_stokes_channel_obstacle",
+    mesh_size=0.20,
+    dt=None,
+    t_end=None,
+    seed=None,
+):
+    if seed is not None:
+        set_global_seed(seed)
+
+    tag = f"fem-smoke-{problem_name}"
+    run_id = generate_run_id(tag)
+    set_active_run(run_id)
+
+    print("Running FEM smoke...")
+    print(f"FEM smoke run ID: {run_id}")
+    print(f"Outputs root: {os.path.join(OUTPUTS_ROOT, run_id)}")
+    print(f"Problem: {problem_name}")
+    print(f"Mesh size: {mesh_size}")
+
+    problem = get_problem(problem_name)
+    mesh = problem.create_mesh(maxh=mesh_size)
+    smoke_meta = problem.build_fem_smoke_metadata(mesh, dt=dt, t_end=t_end)
+    if smoke_meta is None:
+        mesh_plot = _save_mesh_plot(mesh, filename="geometry_mesh.png")
+
+        if not hasattr(problem, "solve_fem_time_series"):
+            raise RuntimeError(
+                f"Problem '{problem_name}' does not implement solve_fem_time_series"
+            )
+
+        result = problem.solve_fem_time_series(mesh, dt=dt, t_end=t_end)
+        snapshot_paths = []
+        for snap in result["snapshots"]:
+            time_tag = f"{snap['time']:.2f}".replace(".", "p")
+            vel_path = _save_scalar_snapshot_plot(
+                mesh,
+                snap["velocity_magnitude"],
+                f"Velocity magnitude at t={snap['time']:.2f}",
+                f"velocity_magnitude_t{time_tag}.png",
+            )
+            pressure_path = _save_scalar_snapshot_plot(
+                mesh,
+                snap["pressure"],
+                f"Pressure at t={snap['time']:.2f}",
+                f"pressure_t{time_tag}.png",
+            )
+            snapshot_paths.append(
+                {
+                    "time": snap["time"],
+                    "velocity_magnitude_plot": vel_path,
+                    "pressure_plot": pressure_path,
+                }
+            )
+        smoke_meta = {
+            "num_vertices": len(mesh.vertices),
+            "num_elements": len(list(mesh.Elements())),
+            "mesh_plot": mesh_plot,
+            "snapshot_plots": snapshot_paths,
+        }
+
+    write_run_metadata(
+        extra={
+            "mode": "fem-smoke",
+            "problem_name": problem_name,
+            "mesh_size": mesh_size,
+            "dt": dt,
+            "t_end": t_end,
+            **smoke_meta,
+        }
+    )
+
+    print("FEM smoke completed successfully.")
+    if "mesh_plot" in smoke_meta:
+        print(f"Mesh plot: {smoke_meta['mesh_plot']}")
+    for item in smoke_meta.get("snapshot_plots", []):
+        if "time" in item:
+            print(
+                f"  t={item['time']:.2f}: "
+                f"{item.get('velocity_magnitude_plot', '')} | {item.get('pressure_plot', '')}"
+            )
+    for item in smoke_meta.get("slice_plots", []):
+        print(f"  slice: {item}")
+    return run_id
+
+
+def run_pinn_smoke(
+    problem_name="navier_stokes_channel_obstacle",
+    problem_kwargs=None,
+    mesh_size=0.35,
+    epochs=25,
+    learning_rate=None,
+    seed=None,
+):
+    if seed is None:
+        seed = _resolve_seed()
+    seed = int(seed)
+    set_global_seed(seed)
+
+    tag = f"pinn-smoke-{problem_name}"
+    run_id = generate_run_id(tag)
+    set_active_run(run_id)
+
+    print("Running PINN smoke...")
+    print(f"PINN smoke run ID: {run_id}")
+    print(f"Outputs root: {os.path.join(OUTPUTS_ROOT, run_id)}")
+    print(f"Problem: {problem_name}")
+    print(f"Mesh size: {mesh_size}")
+    print(f"Epochs: {epochs}")
+    print(f"Device: {DEVICE}")
+
+    problem = get_problem(problem_name, **dict(problem_kwargs or {}))
+    mesh = problem.create_mesh(maxh=mesh_size)
+
+    dataset = problem.create_training_dataset(mesh, seed=seed)
+    if dataset is None:
+        gfu, _ = solve_FEM(mesh, problem=problem)
+        vertex_array = export_vertex_coordinates(mesh)
+        solution_array = export_fem_solution(mesh, gfu, problem=problem)
+        dataset = create_dataset(vertex_array, solution_array)
+
+    coords, targets = dataset.tensors
+    collocation_points = None
+    if hasattr(problem, "create_smoke_collocation_points"):
+        collocation_points = problem.create_smoke_collocation_points(mesh, seed=seed)
+
+    if collocation_points is not None:
+        mesh_x, mesh_y, mesh_t = collocation_points
+        model = FeedForward(
+            mesh_x=mesh_x,
+            mesh_y=mesh_y,
+            mesh_t=mesh_t,
+            problem=problem,
+        ).to(DEVICE)
+        collocation_mode = "problem-defined"
+    else:
+        spatial_vertices = export_vertex_coordinates(mesh)
+        mesh_x, mesh_y = spatial_vertices.T
+        model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+        collocation_mode = "mesh-vertices"
+
+    if learning_rate is None:
+        learning_rate = float(TRAINING_CONFIG["lr"])
+
+    initial_data_loss = float(model.loss_data_on_dataset(dataset).detach().cpu())
+    initial_interior_loss = float(model.loss_interior().detach().cpu())
+    initial_bc_loss = float(model.loss_boundary_condition().detach().cpu())
+
+    print(
+        "Initial losses: "
+        f"data={initial_data_loss:.6e}, "
+        f"interior={initial_interior_loss:.6e}, "
+        f"bc={initial_bc_loss:.6e}"
+    )
+
+    train_model(
+        model,
+        dataset,
+        epochs=epochs,
+        optimizer=TRAINING_CONFIG["optimizer"],
+        lr=learning_rate,
+        validation_dataset=None,
+        validation_residual_points=None,
+        restore_best_epoch_checkpoint=False,
+    )
+
+    final_data_loss = float(model.loss_data_on_dataset(dataset).detach().cpu())
+    final_interior_loss = float(model.loss_interior().detach().cpu())
+    final_bc_loss = float(model.loss_boundary_condition().detach().cpu())
+    diagnostics = None
+    snapshot_paths = []
+    if hasattr(problem, "evaluate_smoke_diagnostics"):
+        diagnostics = problem.evaluate_smoke_diagnostics(model, dataset, mesh)
+        for snapshot in diagnostics.get("predicted_velocity_snapshots", []):
+            time_tag = f"{snapshot['time']:.2f}".replace(".", "p")
+            vel_path = _save_scalar_snapshot_plot(
+                mesh,
+                snapshot["velocity_magnitude"],
+                f"Predicted velocity magnitude at t={snapshot['time']:.2f}",
+                f"predicted_velocity_magnitude_t{time_tag}.png",
+            )
+            snapshot_paths.append(
+                {
+                    "time": snapshot["time"],
+                    "velocity_magnitude_plot": vel_path,
+                }
+            )
+
+    write_run_metadata(
+        extra={
+            "mode": "pinn-smoke",
+            "problem_name": problem_name,
+            "mesh_size": mesh_size,
+            "epochs": int(epochs),
+            "learning_rate": float(learning_rate),
+            "seed": seed,
+            "dataset_size": len(dataset),
+            "dataset_coordinate_dim": int(coords.shape[1]),
+            "dataset_target_dim": int(targets.shape[1]) if targets.ndim == 2 else 1,
+            "collocation_point_count": int(len(model.mesh_x)),
+            "collocation_mode": collocation_mode,
+            "initial_data_loss": initial_data_loss,
+            "initial_interior_loss": initial_interior_loss,
+            "initial_bc_loss": initial_bc_loss,
+            "final_data_loss": final_data_loss,
+            "final_interior_loss": final_interior_loss,
+            "final_bc_loss": final_bc_loss,
+            "diagnostics": diagnostics,
+            "snapshot_plots": snapshot_paths,
+        }
+    )
+
+    print("PINN smoke completed.")
+    print(
+        "Final losses: "
+        f"data={final_data_loss:.6e}, "
+        f"interior={final_interior_loss:.6e}, "
+        f"bc={final_bc_loss:.6e}"
+    )
+    if diagnostics is not None:
+        print(
+            "Diagnostics: "
+            f"mean_speed(pred={diagnostics['overall_mean_pred_speed']:.6e}, "
+            f"target={diagnostics['overall_mean_target_speed']:.6e}), "
+            f"velocity_rmse={diagnostics['overall_velocity_rmse']:.6e}, "
+            f"flux_rmse={diagnostics.get('overall_flux_rmse', float('nan')):.6e}, "
+            f"inlet_u_rmse(t_end)={diagnostics['inlet_u_rmse_t_end']:.6e}, "
+            f"inlet_v_rmse(t_end)={diagnostics['inlet_v_rmse_t_end']:.6e}"
+        )
+        for item in diagnostics.get("time_slice_metrics", []):
+            print(
+                f"  t={item['time']:.2f}: "
+                f"mean_pred_speed={item['mean_pred_speed']:.6e}, "
+                f"mean_target_speed={item['mean_target_speed']:.6e}, "
+                f"velocity_rmse={item['velocity_rmse']:.6e}"
+            )
+        for item in diagnostics.get("flux_metrics", [])[:8]:
+            print(
+                f"  flux[{item['label']} @ x={item['x']:.2f}, t={item['time']:.2f}]: "
+                f"pred={item['predicted_flux']:.6e}, "
+                f"target={item['target_flux']:.6e}"
+            )
+    return run_id
+
+
 def _parse_dev_args(args):
     options = {
         "seed": None,
@@ -91,6 +619,8 @@ def _parse_dev_args(args):
         "reference_mesh_factor": DEV_DEFAULT_REFERENCE_MESH_FACTOR,
         "problem_name": "poisson",
         "problem_kwargs": None,
+        "validation_options": None,
+        "learning_rate": None,
         "export_images": False,
         "create_gifs": False,
         "generate_report": True,
@@ -140,6 +670,13 @@ def _parse_dev_args(args):
                 )
             i += 2
             continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
+            i += 2
+            continue
         if arg == "--reference-mesh-factor" and i + 1 < len(args):
             try:
                 options["reference_mesh_factor"] = float(args[i + 1])
@@ -159,6 +696,10 @@ def _parse_dev_args(args):
                 options["problem_kwargs"] = json.loads(args[i + 1])
             except Exception as e:
                 print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        if arg == "--validation-options" and i + 1 < len(args):
+            options["validation_options"] = _parse_validation_options_arg(args[i + 1])
             i += 2
             continue
         if arg == "--images":
@@ -192,6 +733,8 @@ def _parse_screen_args(args):
         "reference_mesh_factor": SCREEN_DEFAULT_REFERENCE_MESH_FACTOR,
         "problem_name": "poisson",
         "problem_kwargs": None,
+        "validation_options": None,
+        "learning_rate": None,
         "export_images": False,
         "create_gifs": False,
         "generate_report": True,
@@ -244,6 +787,13 @@ def _parse_screen_args(args):
                 )
             i += 2
             continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
+            i += 2
+            continue
         if arg == "--reference-mesh-factor" and i + 1 < len(args):
             try:
                 options["reference_mesh_factor"] = float(args[i + 1])
@@ -263,6 +813,10 @@ def _parse_screen_args(args):
                 options["problem_kwargs"] = json.loads(args[i + 1])
             except Exception as e:
                 print(f"Warning: could not parse problem kwargs JSON: {e}")
+            i += 2
+            continue
+        if arg == "--validation-options" and i + 1 < len(args):
+            options["validation_options"] = _parse_validation_options_arg(args[i + 1])
             i += 2
             continue
         if arg == "--images":
@@ -296,6 +850,8 @@ def _parse_smoke_args(args):
         "reference_mesh_factor": SMOKE_DEFAULT_REFERENCE_MESH_FACTOR,
         "problem_name": "poisson",
         "problem_kwargs": None,
+        "validation_options": None,
+        "learning_rate": None,
     }
 
     i = 0
@@ -342,6 +898,13 @@ def _parse_smoke_args(args):
                 )
             i += 2
             continue
+        if arg == "--lr" and i + 1 < len(args):
+            try:
+                options["learning_rate"] = float(args[i + 1])
+            except ValueError:
+                print(f"Warning: invalid learning rate '{args[i + 1]}', using default")
+            i += 2
+            continue
         if arg == "--reference-mesh-factor" and i + 1 < len(args):
             try:
                 options["reference_mesh_factor"] = float(args[i + 1])
@@ -363,6 +926,10 @@ def _parse_smoke_args(args):
                 print(f"Warning: could not parse problem kwargs JSON: {e}")
             i += 2
             continue
+        if arg == "--validation-options" and i + 1 < len(args):
+            options["validation_options"] = _parse_validation_options_arg(args[i + 1])
+            i += 2
+            continue
         ignored.append(arg)
         i += 1
 
@@ -380,6 +947,8 @@ def run_smoke_test(
     reference_mesh_factor=SMOKE_DEFAULT_REFERENCE_MESH_FACTOR,
     problem_name="poisson",
     problem_kwargs=None,
+    validation_options=None,
+    learning_rate=None,
 ):
     """Run a minimal end-to-end smoke test through the real training stack."""
     print("Running smoke test...")
@@ -421,8 +990,10 @@ def run_smoke_test(
             methods_to_run=methods_to_run,
             problem_name=problem_name,
             problem_kwargs=problem_kwargs,
+            validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
+            learning_rate=learning_rate,
         )
 
         write_run_metadata(
@@ -468,6 +1039,8 @@ def run_dev_experiment(
     reference_mesh_factor=DEV_DEFAULT_REFERENCE_MESH_FACTOR,
     problem_name="poisson",
     problem_kwargs=None,
+    validation_options=None,
+    learning_rate=None,
     export_images=False,
     create_gifs=False,
     generate_report=True,
@@ -513,8 +1086,10 @@ def run_dev_experiment(
             methods_to_run=methods_to_run,
             problem_name=problem_name,
             problem_kwargs=problem_kwargs,
+            validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
+            learning_rate=learning_rate,
         )
 
         write_run_metadata(
@@ -564,6 +1139,8 @@ def run_screen_experiment(
     reference_mesh_factor=SCREEN_DEFAULT_REFERENCE_MESH_FACTOR,
     problem_name="poisson",
     problem_kwargs=None,
+    validation_options=None,
+    learning_rate=None,
     export_images=False,
     create_gifs=False,
     generate_report=True,
@@ -577,7 +1154,9 @@ def run_screen_experiment(
     methods_to_run = methods_to_run or list(SCREEN_DEFAULT_METHODS)
     set_global_seed(seed)
 
-    run_id = generate_run_id(f"screen-seed{seed}")
+    run_tag_suffix = os.environ.get("PINN_RUN_TAG_SUFFIX", "").strip()
+    run_tag = f"screen-{run_tag_suffix}-seed{seed}" if run_tag_suffix else f"screen-seed{seed}"
+    run_id = generate_run_id(run_tag)
     run_paths = set_active_run(run_id)
     print(f"Screen run ID: {run_id}")
     print(f"Outputs root: {run_paths['root']}")
@@ -595,7 +1174,9 @@ def run_screen_experiment(
                 "seed": seed,
                 "methods": methods_to_run,
                 "problem": problem_name,
+                "problem_kwargs": problem_kwargs,
                 "profile": "screen",
+                "run_tag_suffix": run_tag_suffix,
             }
         )
 
@@ -609,8 +1190,10 @@ def run_screen_experiment(
             methods_to_run=methods_to_run,
             problem_name=problem_name,
             problem_kwargs=problem_kwargs,
+            validation_options=validation_options,
             reference_mesh_factor=reference_mesh_factor,
             seed=seed,
+            learning_rate=learning_rate,
         )
 
         write_run_metadata(
@@ -619,7 +1202,9 @@ def run_screen_experiment(
                 "seed": seed,
                 "methods": methods_to_run,
                 "problem": problem_name,
+                "problem_kwargs": problem_kwargs,
                 "profile": "screen",
+                "run_tag_suffix": run_tag_suffix,
             }
         )
 
@@ -876,6 +1461,24 @@ if __name__ == "__main__":
             if seed_override is not None:
                 smoke_options["seed"] = seed_override
             success = run_smoke_test(**smoke_options)
+        elif mode == "geom-smoke":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            geom_options = _parse_geom_smoke_args(remaining)
+            if seed_override is not None:
+                geom_options["seed"] = seed_override
+            success = run_geometry_smoke(**geom_options)
+        elif mode == "fem-smoke":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            fem_options = _parse_fem_smoke_args(remaining)
+            if seed_override is not None:
+                fem_options["seed"] = seed_override
+            success = run_fem_smoke(**fem_options)
+        elif mode == "pinn-smoke":
+            seed_override, remaining = parse_seed_arg(sys.argv[2:])
+            pinn_options = _parse_pinn_smoke_args(remaining)
+            if seed_override is not None:
+                pinn_options["seed"] = seed_override
+            success = run_pinn_smoke(**pinn_options)
         elif mode == "hparams":
             # Optional: allow a JSON grid file or inline JSON after the mode, and --images flag
             import json
@@ -994,6 +1597,23 @@ if __name__ == "__main__":
             )
             print("               --problem <name>    Problem name")
             print("               --problem-kwargs '{...}'  Inline JSON kwargs")
+            print("  geom-smoke   Build a problem-owned geometry and save a mesh plot")
+            print("               --problem <name>    Problem name")
+            print("               --mesh-size <f>     Mesh size for geometry smoke")
+            print("               --seed <int>        Optional seed")
+            print("  fem-smoke    Run a FEM-only smoke on a problem-owned PDE/geometry")
+            print("               --problem <name>    Problem name")
+            print("               --mesh-size <f>     Mesh size for FEM smoke")
+            print("               --dt <f>            Time step for transient FEM smoke")
+            print("               --t-end <f>         Final time for transient FEM smoke")
+            print("               --seed <int>        Optional seed")
+            print("  pinn-smoke   Run a lightweight training smoke on a problem-owned PINN")
+            print("               --problem <name>    Problem name")
+            print("               --problem-kwargs '{...}'  Inline JSON kwargs")
+            print("               --mesh-size <f>     Mesh size for PINN smoke")
+            print("               --epochs <int>      Number of training epochs")
+            print("               --lr <f>            Learning rate override")
+            print("               --seed <int>        Optional seed")
             print("  hparams      Run hyperparameter study")
             print("               [grid.json]    Path to JSON grid file")
             print("               ['{...}']      Inline JSON grid")

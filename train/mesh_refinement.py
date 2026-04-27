@@ -3,8 +3,12 @@ Mesh refinement and error computation functions.
 Contains functions for adaptive mesh refinement based on PINN residuals and error analysis.
 """
 
+import os
 import torch
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # Explicit ngsolve imports for static analyzers and clarity
 from ngsolve import GridFunction, BaseVector, Integrate, VOL, BND
@@ -25,6 +29,87 @@ def _model_images_dir(model):
     except Exception:
         pass
     return None
+
+
+def _extract_triangulation(mesh):
+    verts = [(float(v.point[0]), float(v.point[1])) for v in mesh.vertices]
+    triangles = []
+    for el in mesh.Elements():
+        if getattr(el, "vertices", None) and len(el.vertices) == 3:
+            triangles.append([v.nr for v in el.vertices])
+    if not verts or not triangles:
+        raise RuntimeError("Could not extract triangular mesh connectivity")
+    import matplotlib.tri as mtri
+
+    xs, ys = zip(*verts)
+    return mtri.Triangulation(xs, ys, triangles)
+
+
+def _gridfunction_vertex_values(mesh, gfu):
+    coords = export_vertex_coordinates(mesh).detach().cpu().numpy()
+    values = []
+    for x_coord, y_coord in coords:
+        try:
+            values.append(float(gfu(mesh(float(x_coord), float(y_coord)))))
+        except TypeError:
+            values.append(float(gfu(float(x_coord), float(y_coord))))
+    return np.asarray(values, dtype=float)
+
+
+def _save_scalar_field_plot(mesh, values, title, filename, output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    triang = _extract_triangulation(mesh)
+    out_path = os.path.join(output_dir, filename)
+    fig, ax = plt.subplots(figsize=(8, 6))
+    tpc = ax.tripcolor(triang, np.asarray(values, dtype=float), shading="gouraud", cmap="viridis")
+    ax.set_aspect("equal")
+    ax.set_title(title)
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    fig.colorbar(tpc, ax=ax)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def _export_reference_solution_if_needed(reference_mesh, reference_solution):
+    try:
+        from paths import comparison_images_dir
+
+        output_dir = comparison_images_dir()
+        output_path = os.path.join(output_dir, "reference_solution.png")
+        if os.path.exists(output_path):
+            return
+        reference_values = _gridfunction_vertex_values(reference_mesh, reference_solution)
+        _save_scalar_field_plot(
+            reference_mesh,
+            reference_values,
+            "Reference solution",
+            "reference_solution.png",
+            output_dir,
+        )
+    except Exception as exc:
+        print(f"Warning: failed to export reference solution visualization: {exc}")
+
+
+def _export_model_solution_on_reference(
+    model, reference_mesh, reference_solution, u_pinn_on_ref, iteration
+):
+    try:
+        output_dir = _model_images_dir(model)
+        if output_dir is not None:
+            solution_values = _gridfunction_vertex_values(reference_mesh, u_pinn_on_ref)
+            _save_scalar_field_plot(
+                reference_mesh,
+                solution_values,
+                f"PINN solution (iteration {iteration + 1})",
+                f"solutions_{iteration}.png",
+                output_dir,
+            )
+        _export_reference_solution_if_needed(reference_mesh, reference_solution)
+    except Exception as exc:
+        print(f"Warning: failed to export solution visualization: {exc}")
 
 
 def _append_history_value(model, history_name, value):
@@ -614,6 +699,18 @@ def compute_model_error(
     Returns:
         None (updates model error history)
     """
+    problem = getattr(model, "problem", None)
+    if problem is not None and hasattr(problem, "evaluate_model_against_reference"):
+        handled = problem.evaluate_model_against_reference(
+            model,
+            reference_mesh,
+            reference_solution,
+            export_images=export_images,
+            iteration=iteration,
+        )
+        if handled:
+            return
+
     from geometry import export_vertex_coordinates
 
     # Get reference mesh coordinates
@@ -674,7 +771,9 @@ def compute_model_error(
 
     # Export visualization if requested
     if export_images and iteration is not None:
-        from visualization import export_to_png
+        _export_model_solution_on_reference(
+            model, reference_mesh, reference_solution, u_pinn_on_ref, iteration
+        )
 
         # Project error CoefficientFunction to GridFunction for visualization
         error_gf = GridFunction(reference_fes)
@@ -686,12 +785,12 @@ def compute_model_error(
             f"Error visualization - Range: {error_values.min():.2e} to {error_values.max():.2e}, Mean: {error_values.mean():.2e}"
         )
 
-        export_to_png(
+        _save_scalar_field_plot(
             reference_mesh,
-            error_gf,  # Use GridFunction instead of CoefficientFunction
-            fieldname="errors",
-            filename=f"errors_{iteration}.png",
-            output_dir=_model_images_dir(model),
+            error_values,
+            f"Squared error (iteration {iteration + 1})",
+            f"errors_{iteration}.png",
+            _model_images_dir(model),
         )
 
     print(
@@ -829,16 +928,24 @@ def create_reference_solution(problem, mesh_size_factor=0.05):
     Returns:
         tuple: (reference_mesh, reference_solution)
     """
-    print(
-        f"Creating high-fidelity reference solution with mesh size factor {mesh_size_factor}..."
-    )
-    print("Warning: This may take significant time and memory!")
+    custom_reference = None
+    if hasattr(problem, "create_reference_solution"):
+        custom_reference = problem.create_reference_solution(
+            mesh_size_factor=mesh_size_factor
+        )
+    if custom_reference is not None:
+        reference_mesh, reference_solution = custom_reference
+    else:
+        print(
+            f"Creating high-fidelity reference solution with mesh size factor {mesh_size_factor}..."
+        )
+        print("Warning: This may take significant time and memory!")
 
-    # Create very fine mesh
-    reference_mesh = problem.create_mesh(maxh=mesh_size_factor)
+        # Create very fine mesh
+        reference_mesh = problem.create_mesh(maxh=mesh_size_factor)
 
-    # Solve FEM on reference mesh
-    reference_solution, reference_fes = solve_FEM(reference_mesh, problem=problem)
+        # Solve FEM on reference mesh
+        reference_solution, reference_fes = solve_FEM(reference_mesh, problem=problem)
 
     # Count points for information
     from geometry import export_vertex_coordinates
@@ -1008,6 +1115,18 @@ def compute_random_model_error(
     Returns:
         None (updates model error history)
     """
+    problem = getattr(model, "problem", None)
+    if problem is not None and hasattr(problem, "evaluate_model_against_reference"):
+        handled = problem.evaluate_model_against_reference(
+            model,
+            reference_mesh,
+            reference_solution,
+            export_images=export_images,
+            iteration=iteration,
+        )
+        if handled:
+            return
+
     # Get reference mesh coordinates
     from fem_solver import export_vertex_coordinates
 
@@ -1079,7 +1198,9 @@ def compute_random_model_error(
 
     # Export visualization if requested
     if export_images and iteration is not None:
-        from visualization import export_to_png
+        _export_model_solution_on_reference(
+            model, reference_mesh, reference_solution, u_pinn_on_ref, iteration
+        )
 
         # Project error CoefficientFunction to GridFunction for visualization
         error_gf = GridFunction(reference_fes)
@@ -1091,12 +1212,12 @@ def compute_random_model_error(
             f"Random error visualization - Range: {error_values.min():.2e} to {error_values.max():.2e}, Mean: {error_values.mean():.2e}"
         )
 
-        export_to_png(
+        _save_scalar_field_plot(
             reference_mesh,
-            error_gf,  # Use GridFunction instead of CoefficientFunction
-            fieldname="errors",
-            filename=f"errors_{iteration}.png",
-            output_dir=_model_images_dir(model),
+            error_values,
+            f"Squared error (iteration {iteration + 1})",
+            f"errors_{iteration}.png",
+            _model_images_dir(model),
         )
 
     print(

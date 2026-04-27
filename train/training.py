@@ -3,11 +3,57 @@ Training functions for PINN models.
 Contains functions for training neural networks and managing optimizers.
 """
 
+import copy
+
 import torch
-from config import TRAINING_CONFIG
+from config import TRAINING_CONFIG, VALIDATION_CONFIG
 
 
-def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
+def evaluate_validation_score(
+    model,
+    *,
+    validation_dataset=None,
+    validation_residual_points=None,
+):
+    """Evaluate a held-out validation score without using oracle reference data."""
+    if validation_dataset is None and validation_residual_points is None:
+        return None
+
+    model.eval()
+    with torch.enable_grad():
+        if validation_dataset is not None:
+            data_loss = model.loss_data_on_dataset(validation_dataset)
+        else:
+            data_loss = torch.tensor(0.0, device=next(model.parameters()).device)
+
+        if validation_residual_points is not None:
+            residual_loss = model.loss_interior_on_points(*validation_residual_points)
+        else:
+            residual_loss = torch.tensor(0.0, device=next(model.parameters()).device)
+
+        validation_score = model.w_data * data_loss + model.w_interior * residual_loss
+
+    model.train()
+
+    return {
+        "validation_score": float(validation_score.detach().cpu().item()),
+        "validation_data_loss": float(data_loss.detach().cpu().item()),
+        "validation_residual_loss": float(residual_loss.detach().cpu().item()),
+    }
+
+
+def train_model(
+    model,
+    dataset,
+    epochs=None,
+    optimizer=None,
+    *,
+    validation_dataset=None,
+    validation_residual_points=None,
+    validation_check_interval=None,
+    restore_best_epoch_checkpoint=None,
+    **kwargs,
+):
     """Train the PINN model using the specified optimizer.
 
     Args:
@@ -18,13 +64,19 @@ def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
         **kwargs: Additional optimizer parameters
 
     Returns:
-        None (modifies model in-place)
+        dict | None: Best validation summary if validation is enabled
     """
     if epochs is None:
         epochs = TRAINING_CONFIG["epochs"]
 
     if optimizer is None:
         optimizer = TRAINING_CONFIG["optimizer"]
+    if validation_check_interval is None:
+        validation_check_interval = VALIDATION_CONFIG["check_interval"]
+    if restore_best_epoch_checkpoint is None:
+        restore_best_epoch_checkpoint = VALIDATION_CONFIG.get(
+            "restore_best_epoch_checkpoint", True
+        )
 
     # Set default learning rate if not provided
     if "lr" not in kwargs:
@@ -44,7 +96,13 @@ def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
     print(f"Training with {optimizer} optimizer for {num_steps} epochs...")
 
     if num_steps == 0:
-        return
+        return None
+
+    best_validation = None
+    best_state_dict = None
+    validation_enabled = (
+        validation_dataset is not None or validation_residual_points is not None
+    )
 
     # Training loop: run exactly the configured number of optimizer steps.
     for epoch in range(1, num_steps + 1):
@@ -73,6 +131,42 @@ def train_model(model, dataset, epochs=None, optimizer=None, **kwargs):
             print(
                 f"Epoch {epoch:5d}: Total Loss = {total_loss.detach().cpu().numpy():.6e}"
             )
+
+        if validation_enabled and (
+            epoch == 1
+            or epoch % max(int(validation_check_interval), 1) == 0
+            or epoch == num_steps
+        ):
+            validation_result = evaluate_validation_score(
+                model,
+                validation_dataset=validation_dataset,
+                validation_residual_points=validation_residual_points,
+            )
+            if validation_result is not None:
+                validation_result["epoch"] = epoch
+                if (
+                    best_validation is None
+                    or validation_result["validation_score"]
+                    < best_validation["validation_score"]
+                ):
+                    best_validation = validation_result
+                    best_state_dict = copy.deepcopy(model.state_dict())
+                print(
+                    "            Validation Score = "
+                    f"{validation_result['validation_score']:.6e} "
+                    f"(data={validation_result['validation_data_loss']:.6e}, "
+                    f"residual={validation_result['validation_residual_loss']:.6e})"
+                )
+
+    if best_state_dict is not None and restore_best_epoch_checkpoint:
+        model.load_state_dict(best_state_dict)
+        print(
+            "Restored best validation checkpoint: "
+            f"epoch={best_validation['epoch']}, "
+            f"score={best_validation['validation_score']:.6e}"
+        )
+
+    return best_validation
 
 
 def setup_optimizer(model, optimizer_type="Adam", **kwargs):

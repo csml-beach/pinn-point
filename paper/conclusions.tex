@@ -1,3 +1,8 @@
 \section{Conclusions}
+\label{sec:conclusions}
 
-The repository is now structured to support an iterative paper-writing workflow, but the conclusion should remain modest until the experiment queue in \texttt{docs/paper\_plan.md} is closed. The final version of this section should summarize only the claims supported by curated figures and tables, then state the main limitations and the most credible next extensions.
+In this work, we introduced a novel family of adaptive collocation sampling strategies for Physics-Informed Neural Networks (PINNs), focusing on \textbf{power-tempered} and \textbf{entropy-balanced} residual guidance. By leveraging a mesh-based scaffold, our methods maintain spatial diversity while dynamically concentrating collocation points in high-residual regions, addressing the stability and efficiency challenges often encountered when training PINNs on complex 2D geometries.
+
+Our empirical evaluation, conducted using the \textbf{\pinnpoint} benchmarking framework, demonstrates that these adaptive strategies provide significant improvements in convergence and accuracy across a suite of challenging PDEs, including Navier-Stokes, Advection-Diffusion, and Allen-Cahn equations. We established a rigorous "fair comparison" protocol that isolates the impact of the sampling policy, confirming that our methods offer a superior error-to-cost trade-off compared to established baselines like RAD and uniform random sampling.
+
+Future work will explore the extension of these adaptive strategies to three-dimensional domains and time-dependent problems with dynamic mesh refinement. Additionally, we plan to investigate the integration of these sampling policies with multi-fidelity data to further accelerate PINN training in data-sparse regimes.

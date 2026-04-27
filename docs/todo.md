@@ -13,6 +13,7 @@ This file tracks follow-ups that should be revisited after the current refactor 
 - [ ] Replace the remaining string-based method dispatch in `train/experiments.py` with a cleaner registry-driven flow end to end.
 - [ ] Decouple geometry selection from the current hardcoded perforated square domain in `train/geometry.py` so problems can own their own domain construction.
 - [ ] Fold the current remote submission workflow into the repo docs and experiment workflow, using the sibling toolkit at `../remote-ops/pinn-point/README.md` as the current reference instead of the missing `docs/remote_experiment_plan.md`.
+- [ ] Rerun the Poisson benchmark with `adaptive_persistent` and the current validation/checkpoint policy. The stored Poisson screens predate the persistence-based adaptive method, so the Poisson comparison is not yet aligned with the current adaptive mainline.
 
 ## Next Round: RAD Stability
 
