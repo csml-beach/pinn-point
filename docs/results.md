@@ -2,7 +2,7 @@
 
 ## Clean 5-Method Paper Runs (2026-04-28) ← USE THESE FOR PAPER
 
-Definitive paper-facing runs with all 5 methods in a **single run directory per seed** (no gap-fill artifacts). Both AC and NS ran at 100 epochs, 4 iterations on `m3-cpu-xl` at commit `5e8c148`.
+Definitive paper-facing runs with all 5 methods in a **single run directory per seed** (no gap-fill artifacts). AC, NS, Poisson ran at 100 epochs / 4 iterations; AD at 300 epochs / 8 iterations (all on `m3-cpu-xl`, commit `2d77b13`).
 
 **Methods**: `halton`, `random`, `rad`, `adaptive_power_tempered`, `adaptive_halton_base`  
 **Seeds**: 42, 123, 456, 789, 1011, 2022, 3033, 4044, 5055, 6066 (10 seeds)
@@ -10,6 +10,8 @@ Definitive paper-facing runs with all 5 methods in a **single run directory per 
 **Output roots**:
 - `outputs/m3-large-cpu-allen-cahn-obstacles-5method-100e-10seed/` — run_id `2026-04-28_08-14-06_screen-cpu-allen-cahn-screen-seed{N}`
 - `outputs/m3-large-cpu-navier-stokes-5method-100e-10seed/` — run_id `2026-04-28_08-16-52_screen-seed{N}`
+- `outputs/m3-cpu-xl-poisson-sweep-400e/` — 4 variants × 10 seeds; run_ids `2026-04-26_{08-15,08-45,09-15,09-40}-*_screen-cpu-poisson-sweep-{variant}-seed{N}` — **Poisson uses all 4 geometry variants**: `baseline`, `sharp`, `narrow`, `narrow_sharp`
+- `outputs/m3-large-cpu-advection-diffusion-5method-300e-10seed/` — 300e/8it; run_id `2026-04-28_17-45-2{7,9}_screen-cpu-advection-screen-seed{N}`
 
 **10-seed means (final relative L2 error ± std)**:
 
@@ -25,6 +27,11 @@ Definitive paper-facing runs with all 5 methods in a **single run directory per 
 | Navier-Stokes | `adaptive_power_tempered` | 0.6330 | 0.0250 | **0.05659** | 0.01008 |
 | Navier-Stokes | `random` | 0.6328 | 0.0304 | 0.06127 | 0.01110 |
 | Navier-Stokes | `rad` | 0.6331 | 0.0268 | **0.05651** | 0.00858 |
+| Advection-Diffusion | `adaptive_power_tempered` | **0.5761** | 0.0616 | **0.5831** | 0.0605 |
+| Advection-Diffusion | `adaptive_halton_base` | 0.5971 | 0.0702 | 0.6021 | 0.0693 |
+| Advection-Diffusion | `halton` | 0.6166 | 0.0693 | 0.6217 | 0.0685 |
+| Advection-Diffusion | `random` | 0.6174 | 0.0886 | 0.6231 | 0.0869 |
+| Advection-Diffusion | `rad` | 0.6298 | 0.0751 | 0.6352 | 0.0751 |
 
 **Note**: NS methods are effectively tied on L2 (spread < 0.5%); adaptive methods have lower residual on both problems. AC shows clearer separation.
 

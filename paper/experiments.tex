@@ -28,3 +28,6 @@ A key contribution of our work is the establishment of a fair benchmarking proto
 \subsection{Experimental Setup}
 
 The PINN models are implemented using PyTorch and consist of feed-forward neural networks with Swish activation functions. We use the Adam optimizer for the initial training phase, followed by L-BFGS for fine-tuning where appropriate. All experiments are run with multiple seeds (typically 10) to ensure statistical significance, with results reported as mean values with standard deviation shaded regions.
+
+\paragraph{Training budgets.}
+For Navier-Stokes and Allen-Cahn, all methods are trained for 100 epochs with 4 adaptive refinement iterations. For Advection-Diffusion, we use 300 epochs and 8 iterations. This increased budget was chosen because, under the standard 100-epoch setting, the error remained large across \emph{all} methods uniformly, indicating that the problem simply requires more training to reach informative accuracy levels. Crucially, the additional budget did not disproportionately benefit any specific sampling strategy, preserving the fairness of the comparison.
