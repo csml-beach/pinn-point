@@ -1,5 +1,35 @@
 # Current Results Summary
 
+## Clean 5-Method Paper Runs (2026-04-28) ← USE THESE FOR PAPER
+
+Definitive paper-facing runs with all 5 methods in a **single run directory per seed** (no gap-fill artifacts). Both AC and NS ran at 100 epochs, 4 iterations on `m3-cpu-xl` at commit `5e8c148`.
+
+**Methods**: `halton`, `random`, `rad`, `adaptive_power_tempered`, `adaptive_halton_base`  
+**Seeds**: 42, 123, 456, 789, 1011, 2022, 3033, 4044, 5055, 6066 (10 seeds)
+
+**Output roots**:
+- `outputs/m3-large-cpu-allen-cahn-obstacles-5method-100e-10seed/` — run_id `2026-04-28_08-14-06_screen-cpu-allen-cahn-screen-seed{N}`
+- `outputs/m3-large-cpu-navier-stokes-5method-100e-10seed/` — run_id `2026-04-28_08-16-52_screen-seed{N}`
+
+**10-seed means (final relative L2 error ± std)**:
+
+| Problem | Method | Mean L2 ↓ | Std | Mean Resid ↓ | Std |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Allen-Cahn | `adaptive_power_tempered` | **0.4112** | 0.0131 | **0.03977** | 0.00695 |
+| Allen-Cahn | `adaptive_halton_base` | 0.4123 | 0.0234 | 0.04296 | 0.00605 |
+| Allen-Cahn | `rad` | 0.4158 | 0.0226 | 0.04403 | 0.00596 |
+| Allen-Cahn | `random` | 0.4193 | 0.0205 | 0.04753 | 0.00884 |
+| Allen-Cahn | `halton` | 0.4213 | 0.0229 | 0.04810 | 0.00947 |
+| Navier-Stokes | `halton` | **0.6287** | 0.0318 | 0.06228 | 0.01099 |
+| Navier-Stokes | `adaptive_halton_base` | 0.6304 | 0.0233 | 0.05735 | 0.00919 |
+| Navier-Stokes | `adaptive_power_tempered` | 0.6330 | 0.0250 | **0.05659** | 0.01008 |
+| Navier-Stokes | `random` | 0.6328 | 0.0304 | 0.06127 | 0.01110 |
+| Navier-Stokes | `rad` | 0.6331 | 0.0268 | **0.05651** | 0.00858 |
+
+**Note**: NS methods are effectively tied on L2 (spread < 0.5%); adaptive methods have lower residual on both problems. AC shows clearer separation.
+
+---
+
 ## Approved Suite with `adaptive_halton_base`, 20 Seeds
 
 Current strongest approved-suite comparison:
