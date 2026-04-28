@@ -6,18 +6,21 @@ We consider the problem of finding an approximate solution $u_\theta(\mathbf{x})
 \label{eq:pde_general}
     \mathcal{F}[u](\mathbf{x}) = f(\mathbf{x}), \quad \mathbf{x} \in \Omega
 \end{equation}
-subject to the boundary condition $\mathcal{B}[u](\mathbf{x}) = g(\mathbf{x})$ on $\partial \Omega$. Physics-informed neural networks (PINNs) approximate $u(\mathbf{x})$ using a feed-forward neural network $u_\theta$ parameterized by $\theta \in \Theta$. The network is optimized by minimizing a composite objective function:
+Here, $\mathcal{F}[\cdot]$ denotes a (possibly nonlinear) differential operator, $f : \Omega \to \mathbb{R}^m$ is a given forcing term, and $\mathcal{B}[\cdot]$ encodes the boundary conditions.
+subject to the boundary condition $\mathcal{B}[u](\mathbf{x}) = g(\mathbf{x})$ on $\partial \Omega$. Physics-informed neural networks (PINNs) approximate $u(\mathbf{x})$ using a neural network $u_\theta$ with trainable parameters $\theta$. The network is optimized by minimizing a composite objective function:
 \begin{equation}
     \mathcal{L}(\theta) = \lambda_r \mathcal{L}_r(\theta; \mathcal{X}_r) + \lambda_b \mathcal{L}_b(\theta; \mathcal{X}_b) + \lambda_d \mathcal{L}_d(\theta; \mathcal{X}_d)
 \end{equation}
-where the residual loss $\mathcal{L}_r$ is defined as the mean squared residual over a collocation set $\mathcal{X}_r \subset \Omega$:
+Here $\mathcal{L}_r$, $\mathcal{L}_b$, and $\mathcal{L}_d$ are the interior residual, boundary condition, and supervised data losses, respectively; $\lambda_r, \lambda_b, \lambda_d \geq 0$ are scalar weights balancing their contributions; and $\mathcal{X}_r \subset \Omega$, $\mathcal{X}_b \subset \partial\Omega$, $\mathcal{X}_d$ are the corresponding point sets. 
+
+The residual loss is defined as the mean squared PDE residual over the interior collocation set:
 \begin{equation}
     \mathcal{L}_r(\theta; \mathcal{X}_r) = \frac{1}{|\mathcal{X}_r|} \sum_{\mathbf{x} \in \mathcal{X}_r} \|\mathcal{R}[u_\theta](\mathbf{x})\|^2, \quad \mathcal{R}[u_\theta] \equiv \mathcal{F}[u_\theta] - f
 \end{equation}
 The accuracy of the PINN approximation is critically sensitive to the distribution of $\mathcal{X}_r$, particularly in regions where the solution $u$ exhibits sharp gradients or the domain $\Omega$ possesses complex geometric features.
 
 \subsection{The Mesh-Guided Computational Scaffold}
-We propose a hybrid framework that couples \textbf{simplicial mesh evolution} ($h$-refinement) with adaptive importance sampling. The domain $\Omega$ is discretized by a sequence of conforming triangular meshes $\{\mathcal{M}^{(k)}\}_{k=0}^K$, where each mesh $\mathcal{M} = \{E_i\}_{i=1}^{N_e}$ consists of $N_e$ elements such that $\overline{\Omega} = \cup_{i=1}^{N_e} E_i$ and the intersection of any two elements is either empty, a common vertex, or a common edge.
+We propose a hybrid framework that couples simplicial mesh evolution ($h$-refinement) with adaptive importance sampling. The domain $\Omega$ is discretized by a sequence of conforming triangular meshes $\{\mathcal{M}^{(k)}\}_{k=0}^K$, where each mesh $\mathcal{M} = \{E_i\}_{i=1}^{N_e}$ consists of $N_e$ elements such that $\overline{\Omega} = \cup_{i=1}^{N_e} E_i$ and the intersection of any two elements is either empty, a common vertex, or a common edge.
 
 \subsubsection{H-Refinement and Local Error Indicators}
 For each element $E_i \in \mathcal{M}^{(k)}$, we define a local error indicator $\eta_i^{(k)}$ based on the $L^2$-norm of the current PDE residual:
@@ -27,7 +30,7 @@ For each element $E_i \in \mathcal{M}^{(k)}$, we define a local error indicator 
 In our implementation, this integral is approximated using a high-order vertex-averaging scheme on the mesh. Elements are marked for refinement if they exceed a relative threshold: $\eta_i > \tau \cdot \max_{j} \eta_j$, where $\tau \in (0, 1]$ is the refinement aggressiveness. The mesh is updated via a refinement operator $\mathcal{T}: \mathcal{M}^{(k)} \to \mathcal{M}^{(k+1)}$ (e.g., longest-edge bisection), ensuring that the scaffold density $\rho(\mathbf{x})$ tracks the localized residual field.
 
 \subsubsection{Rank-Persistent Field Projection}
-To stabilize the sampling process against transient optimizer oscillations, we compute a \textbf{rank-persistent score} $\hat{z}_i^{(k)}$. We first map the indicator $\eta_i^{(k)}$ to its normalized ordinal rank:
+To stabilize the sampling process against transient optimizer oscillations, we compute a rank-persistent score $\hat{z}_i^{(k)}$. We first map the indicator $\eta_i^{(k)}$ to its normalized ordinal rank:
 \begin{equation}
     z_i^{(k)} = \frac{\sigma(\eta_i^{(k)}) - 1}{N_e - 1}, \quad \sigma(\eta) \equiv \text{rank of } \eta \text{ in } \{\eta_j\}_{j=1}^{N_e}
 \end{equation}
@@ -42,12 +45,12 @@ The mesh scaffold $\mathcal{M}^{(k)}$ induces a piecewise constant probability d
 \begin{equation}
     f_{\mathcal{X}}^{(k)}(\mathbf{x}) = \sum_{i=1}^{N_e} \frac{P(E_i)}{\text{Area}(E_i)} \mathbb{I}_{E_i}(\mathbf{x})
 \end{equation}
-where $\mathbb{I}_{E_i}$ is the indicator function for element $E_i$, and $P(E_i)$ is the discrete probability mass assigned to that element. We propose two strategies for defining $P(E_i)$, both governed by an \textbf{information-theoretic control loop}.
+where $\mathbb{I}_{E_i}$ is the indicator function for element $E_i$, and $P(E_i)$ is the discrete probability mass assigned to that element. We propose two strategies for defining $P(E_i)$, both governed by an information-theoretic control loop.
 
-Let $\mathcal{H}_{\text{norm}} = -(1/\ln N_e) \sum p_i \ln p_i$ be the normalized entropy of the residual distribution $p_i = \eta_i / \sum \eta_j$. We define the \textbf{residual concentration} $C = 1 - \mathcal{H}_{\text{norm}}$ as the driver for adaptivity.
+Let $\mathcal{H}_{\text{norm}} = -(1/\ln N_e) \sum p_i \ln p_i$ be the normalized entropy of the residual distribution $p_i = \eta_i / \sum \eta_j$. We define the residual concentration $C = 1 - \mathcal{H}_{\text{norm}}$ as the driver for adaptivity.
 
 \subsubsection{Power-Tempered Sampling}
-The \textbf{Power-Tempered} strategy employs exponential tilting of the geometric baseline to focus the collocation set:
+The Power-Tempered strategy employs exponential tilting of the geometric baseline to focus the collocation set:
 \begin{equation}
     P(E_i) = \frac{\text{Area}_i^{\gamma} \exp\left( \beta \hat{z}_i \right)}{\sum_{j=1}^{N_e} \text{Area}_j^{\gamma} \exp\left( \beta \hat{z}_j \right)}
 \end{equation}
@@ -58,15 +61,15 @@ where $\gamma$ is a geometric scaling exponent. The inverse temperature $\beta$ 
 This formulation ensures that the sampling density $f_{\mathcal{X}}$ smoothly transitions from a nearly uniform geometric distribution (high entropy, $C \to 0$) to a sharply peaked distribution targeting high-residual corridors (low entropy, $C \to 1$).
 
 \subsubsection{Entropy-Balanced Sampling}
-The \textbf{Entropy-Balanced} strategy uses a dynamic convex combination of geometric and adaptive measures:
+The Entropy-Balanced strategy uses a dynamic convex combination of geometric and adaptive measures:
 \begin{equation}
     P(E_i) = (1 - \lambda) \frac{\text{Area}_i}{\text{Area}(\Omega)} + \lambda \frac{\hat{z}_i^\kappa}{\sum \hat{z}_j^\kappa}
 \end{equation}
-where $\kappa$ is a rank-sensitivity parameter. The mixing coefficient $\lambda(C) = \lambda_{\min} + (\lambda_{\max} - \lambda_{\min}) C$ ensures a \textbf{robust coverage floor}, preventing the "collapse" of the collocation set into a few mesh elements and maintaining physical constraints in low-residual regions.
+where $\kappa$ is a rank-sensitivity parameter. The mixing coefficient $\lambda(C) = \lambda_{\min} + (\lambda_{\max} - \lambda_{\min}) C$ ensures a robust coverage floor, preventing the "collapse" of the collocation set into a few mesh elements and maintaining physical constraints in low-residual regions.
 
 \subsection{Deterministic Allocation via the Largest Remainder Method}
 Given a global budget of $N_r$ collocation points, we must distribute them into integer quotas $n_i$ per element. This is framed as a constrained optimization problem:
 \begin{equation}
     \text{minimize} \sum_{i=1}^{N_e} |n_i - N_r P(E_i)| \quad \text{s.t.} \sum_{i=1}^{N_e} n_i = N_r, \ n_i \in \mathbb{Z}_{\geq 0}
 \end{equation}
-This is solved exactly using the \textbf{Largest Remainder Method}, where initial quotas are set to $\lfloor N_r P(E_i) \rfloor$ and the residual points are allocated to elements with the largest fractional parts. Points within each triangle are then sampled via an affine transformation from the reference unit simplex $\hat{E} \subset \mathbb{R}^2$ to $E_i$.
+This is solved exactly using the Largest Remainder Method, where initial quotas are set to $\lfloor N_r P(E_i) \rfloor$ and the residual points are allocated to elements with the largest fractional parts. Points within each triangle are then sampled via an affine transformation from the reference unit simplex $\hat{E} \subset \mathbb{R}^2$ to $E_i$.
