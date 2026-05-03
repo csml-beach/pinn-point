@@ -1103,8 +1103,19 @@ def compute_random_residuals(
     Returns:
         None (updates model residual history)
     """
-    # Compute PDE residuals at random points
-    res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().cpu().numpy()
+    # Compute PDE residuals at random points. Spatial 3D problems keep z as a
+    # separate mesh buffer; include it here so residual history matches the
+    # actual collocation points used for training.
+    has_3d = bool(getattr(getattr(model, "problem", None), "has_spatial_3d", False))
+    if has_3d:
+        res = (
+            model.PDE_residual(model.mesh_x, model.mesh_y, z=model.mesh_z)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+    else:
+        res = model.PDE_residual(model.mesh_x, model.mesh_y).detach().cpu().numpy()
 
     # For random points, we need to interpolate residuals to the mesh for visualization
     # Create GridFunction and interpolate residuals from random points to mesh
@@ -1117,16 +1128,26 @@ def compute_random_residuals(
     _mc = mesh_coords.T if hasattr(mesh_coords, 'T') else mesh_coords.numpy().T
     mesh_x = _mc[0]
     mesh_y = _mc[1]
+    mesh_z = _mc[2] if has_3d and len(_mc) > 2 else None
 
     # Simple interpolation: find nearest random point for each mesh point
     import numpy as np
 
-    random_coords = torch.stack([model.mesh_x, model.mesh_y], dim=1).cpu().numpy()
+    if has_3d:
+        random_coords = (
+            torch.stack([model.mesh_x, model.mesh_y, model.mesh_z], dim=1)
+            .detach()
+            .cpu()
+            .numpy()
+        )
+    else:
+        random_coords = torch.stack([model.mesh_x, model.mesh_y], dim=1).detach().cpu().numpy()
 
     interpolated_res = []
-    for mx, my in zip(mesh_x, mesh_y):
+    mesh_iter = zip(mesh_x, mesh_y, mesh_z) if has_3d and mesh_z is not None else zip(mesh_x, mesh_y)
+    for mesh_point in mesh_iter:
         # Find nearest random point
-        distances = np.sum((random_coords - np.array([mx, my])) ** 2, axis=1)
+        distances = np.sum((random_coords - np.array(mesh_point)) ** 2, axis=1)
         nearest_idx = np.argmin(distances)
         interpolated_res.append(res[nearest_idx])
 
