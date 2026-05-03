@@ -18,7 +18,7 @@ Parameters (Lamé):
 
 from __future__ import annotations
 
-from typing import Any, List, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -55,6 +55,11 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
         fe_order: int = 2,
         bc_loss_weight: float = 10.0,
         traction_loss_weight: float = 1.0,
+        hole_centers_x: Sequence[float] | None = None,
+        localized_traction: bool = False,
+        traction_patch_center_y: float | None = None,
+        traction_patch_center_z: float | None = None,
+        traction_patch_sigma: float = 0.15,
     ):
         self.length = float(length)
         self.width = float(width)
@@ -68,6 +73,19 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
         self.fe_order = int(fe_order)
         self.bc_loss_weight = float(bc_loss_weight)
         self.traction_loss_weight = float(traction_loss_weight)
+        self.hole_centers_x = [float(cx) for cx in (hole_centers_x or [0.5, 1.5, 2.5])]
+        self.localized_traction = bool(localized_traction)
+        self.traction_patch_center_y = (
+            self.width / 2.0
+            if traction_patch_center_y is None
+            else float(traction_patch_center_y)
+        )
+        self.traction_patch_center_z = (
+            self.height / 2.0
+            if traction_patch_center_z is None
+            else float(traction_patch_center_z)
+        )
+        self.traction_patch_sigma = float(traction_patch_sigma)
 
     # ------------------------------------------------------------------
     # Geometry and mesh
@@ -83,7 +101,7 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
 
         # Three cylindrical cutouts along Y axis at different X positions
         cyls = []
-        for cx in [0.5, 1.5, 2.5]:
+        for cx in self.hole_centers_x:
             cyl = Cylinder(
                 Pnt(cx, 0, self.height / 2.0),
                 Y,
@@ -126,6 +144,47 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
     def get_dirichlet_boundaries(self) -> list:
         return ["fix"]
 
+    def _traction_profile_torch(
+        self, y_coord: torch.Tensor, z_coord: torch.Tensor
+    ) -> torch.Tensor:
+        if not self.localized_traction:
+            return torch.ones_like(y_coord)
+
+        sigma = max(self.traction_patch_sigma, 1.0e-6)
+        dy = (y_coord - self.traction_patch_center_y) / sigma
+        dz = (z_coord - self.traction_patch_center_z) / sigma
+        return torch.exp(-0.5 * (dy * dy + dz * dz))
+
+    def _force_face_training_points(self, count: int):
+        from config import DEVICE
+
+        count = int(count)
+        if not self.localized_traction:
+            y_force = torch.rand(count, device=DEVICE) * self.width
+            z_force = torch.rand(count, device=DEVICE) * self.height
+        else:
+            focused = count // 2
+            uniform = count - focused
+            sigma = max(self.traction_patch_sigma, 1.0e-6)
+            y_patch = torch.normal(
+                mean=self.traction_patch_center_y,
+                std=sigma,
+                size=(focused,),
+                device=DEVICE,
+            ).clamp(0.0, self.width)
+            z_patch = torch.normal(
+                mean=self.traction_patch_center_z,
+                std=sigma,
+                size=(focused,),
+                device=DEVICE,
+            ).clamp(0.0, self.height)
+            y_uniform = torch.rand(uniform, device=DEVICE) * self.width
+            z_uniform = torch.rand(uniform, device=DEVICE) * self.height
+            y_force = torch.cat([y_patch, y_uniform], dim=0)
+            z_force = torch.cat([z_patch, z_uniform], dim=0)
+        x_force = torch.full((count,), self.length, device=DEVICE)
+        return x_force, y_force, z_force
+
     # ------------------------------------------------------------------
     # FEM solve
     # ------------------------------------------------------------------
@@ -143,8 +202,19 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
         )
         a.Assemble()
 
-        # Traction force on "force" face
-        force = CoefficientFunction((self.traction_magnitude, 0.0, 0.0))
+        # Traction force on "force" face.
+        if self.localized_traction:
+            sigma = max(self.traction_patch_sigma, 1.0e-6)
+            profile = exp(
+                -0.5
+                * (
+                    ((y - self.traction_patch_center_y) / sigma) ** 2
+                    + ((z - self.traction_patch_center_z) / sigma) ** 2
+                )
+            )
+            force = CoefficientFunction((self.traction_magnitude * profile, 0.0, 0.0))
+        else:
+            force = CoefficientFunction((self.traction_magnitude, 0.0, 0.0))
         f = LinearForm(force * v * ds("force"))
         f.Assemble()
 
@@ -334,9 +404,7 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
 
         # Neumann: force face (x=L), traction σn = (traction_magnitude, 0, 0).
         n_force = max(num_boundary_points, 100)
-        y_force = torch.rand(n_force, device=DEVICE) * self.width
-        z_force = torch.rand(n_force, device=DEVICE) * self.height
-        x_force = torch.full((n_force,), self.length, device=DEVICE)
+        x_force, y_force, z_force = self._force_face_training_points(n_force)
         x_force.requires_grad_(True)
         y_force.requires_grad_(True)
         z_force.requires_grad_(True)
@@ -344,7 +412,9 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
         sxx, _, _, sxy, sxz, _ = self._stress_components(
             model, x_force, y_force, z_force
         )
-        target_tx = torch.full_like(sxx, self.traction_magnitude)
+        target_tx = self.traction_magnitude * self._traction_profile_torch(
+            y_force, z_force
+        )
         loss_force = torch.mean(
             torch.square(sxx - target_tx)
             + torch.square(sxy)
@@ -501,6 +571,9 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
             "num_vertices": len(verts),
             "mesh_dimension": 3,
             "problem": self.name,
+            "cylinder_radius": self.cylinder_radius,
+            "localized_traction": self.localized_traction,
+            "traction_patch_sigma": self.traction_patch_sigma,
         }
 
     def build_fem_smoke_metadata(self, mesh, dt=None, t_end=None) -> dict:
@@ -530,4 +603,36 @@ class ElasticityNotchedCantilever3DProblem(PDEProblem):
             "num_dofs": n_dofs,
             "displacement_norms": disp_norms,
             "problem": self.name,
+            "cylinder_radius": self.cylinder_radius,
+            "localized_traction": self.localized_traction,
+            "traction_patch_sigma": self.traction_patch_sigma,
         }
+
+
+class ElasticityLocalizedCantilever3DProblem(ElasticityNotchedCantilever3DProblem):
+    """Harder 3D elasticity case with narrow ligaments and localized end loading."""
+
+    name = "elasticity_localized_cantilever_3d"
+    description = (
+        "Hard 3D elasticity cantilever with larger cylindrical cutouts and "
+        "a localized Gaussian traction patch on the loaded end face"
+    )
+
+    def __init__(
+        self,
+        cylinder_radius: float = 0.285,
+        traction_magnitude: float = 5e-3,
+        traction_patch_sigma: float = 0.12,
+        traction_patch_center_y: float | None = None,
+        traction_patch_center_z: float | None = None,
+        **kwargs,
+    ):
+        super().__init__(
+            cylinder_radius=cylinder_radius,
+            traction_magnitude=traction_magnitude,
+            localized_traction=True,
+            traction_patch_sigma=traction_patch_sigma,
+            traction_patch_center_y=traction_patch_center_y,
+            traction_patch_center_z=traction_patch_center_z,
+            **kwargs,
+        )

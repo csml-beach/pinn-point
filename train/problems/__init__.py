@@ -12,6 +12,8 @@ Available problems:
     - AdvectionDiffusionProblem: steady advection-diffusion-reaction equation
     - NavierStokesChannelObstacleProblem: geometry-first prototype for a future
       transient Navier-Stokes benchmark
+    - ElasticityNotchedCantilever3DProblem: 3D notched cantilever elasticity
+    - ElasticityLocalizedCantilever3DProblem: harder localized-load 3D elasticity
     
 To add a new problem:
     1. Create a new file in this directory (e.g., heat.py)
@@ -35,7 +37,10 @@ Example:
 from .base import PDEProblem
 from .advection_diffusion import AdvectionDiffusionProblem
 from .allen_cahn_obstacles_2d import AllenCahnObstacles2DProblem
-from .elasticity_notched_cantilever_3d import ElasticityNotchedCantilever3DProblem
+from .elasticity_notched_cantilever_3d import (
+    ElasticityLocalizedCantilever3DProblem,
+    ElasticityNotchedCantilever3DProblem,
+)
 from .navier_stokes_channel_obstacle import NavierStokesChannelObstacleProblem
 from .poisson import PoissonProblem
 from .poisson_ring import PoissonRingProblem
@@ -50,6 +55,7 @@ PROBLEM_REGISTRY = {
     "advection_diffusion": AdvectionDiffusionProblem,
     "navier_stokes_channel_obstacle": NavierStokesChannelObstacleProblem,
     "elasticity_notched_cantilever_3d": ElasticityNotchedCantilever3DProblem,
+    "elasticity_localized_cantilever_3d": ElasticityLocalizedCantilever3DProblem,
 }
 
 
