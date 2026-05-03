@@ -43,10 +43,8 @@ class QuasiRandomMethod(TrainingMethod):
         """
         self.domain_bounds = domain_bounds
         self.seed = seed
-        self._cached_points = None
-        self._cached_num_points = None
 
-    def _create_sampler(self, seed: int):
+    def _create_sampler(self, seed: int, dim: int = 2):
         """Create the quasi-random sampler. Override in subclasses."""
         raise NotImplementedError
 
@@ -55,39 +53,58 @@ class QuasiRandomMethod(TrainingMethod):
     ) -> np.ndarray:
         """Generate quasi-random points using bounding box + rejection sampling.
 
+        Each iteration uses a non-overlapping section of the global Halton/Sobol
+        sequence, so points differ across iterations while preserving the
+        low-discrepancy coverage guarantee within each iteration.
+
         Args:
             num_points: Target number of points inside domain
             mesh: NGSolve mesh for domain checking
+            iteration: Current training iteration (used to advance the sequence)
 
         Returns:
-            Array of shape (num_points, 2) with valid interior points
+            Array of shape (num_points, D) with valid interior points
         """
         if not HAS_QMC:
             raise ImportError("scipy.stats.qmc required for quasi-random sampling")
 
-        x_min, x_max, y_min, y_max = self.domain_bounds
-        x_range = x_max - x_min
-        y_range = y_max - y_min
+        is_3d = getattr(mesh, 'dim', 2) == 3
 
-        batch_size = num_points * 4  # Oversample to account for rejection
-        offset = 0
+        if is_3d:
+            points_array = np.array([v.point for v in mesh.vertices])
+            mins = np.min(points_array, axis=0)
+            maxs = np.max(points_array, axis=0)
+            ranges = maxs - mins
+        else:
+            x_min, x_max, y_min, y_max = self.domain_bounds
+            mins = np.array([x_min, y_min])
+            ranges = np.array([x_max - x_min, y_max - y_min])
+
+        dim = 3 if is_3d else 2
+        batch_size = max(1024, num_points * 4)  # Oversample to account for rejection
+        max_batches = 50
+
+        # Reserve a full rejection-sampling window per iteration. Advancing by
+        # only one batch can overlap if an earlier iteration needed extra
+        # rejection batches to reach the requested accepted-point count.
+        iter_advance = int(iteration or 0) * batch_size * max_batches
+
+        # A single sampler shared across rejection batches so all batches
+        # continue the same sequence (no duplicates, LDS property preserved).
+        sampler = self._create_sampler(self.seed, dim=dim)
+        if iter_advance > 0:
+            sampler.fast_forward(iter_advance)
 
         def batch_generator(size: int) -> np.ndarray:
-            nonlocal offset
-            sampler = self._create_sampler(self.seed + offset)
             unit_points = sampler.random(size)
-            scaled_points = np.empty_like(unit_points)
-            scaled_points[:, 0] = unit_points[:, 0] * x_range + x_min
-            scaled_points[:, 1] = unit_points[:, 1] * y_range + y_min
-            offset += size
-            return scaled_points
+            return unit_points * ranges + mins
 
         return sample_points_in_domain(
             mesh,
             num_points,
             batch_generator,
             batch_size=batch_size,
-            max_batches=50,
+            max_batches=max_batches,
             warn_label="quasi-random points",
             method_name=self.name,
             iteration=iteration,
@@ -99,11 +116,12 @@ class QuasiRandomMethod(TrainingMethod):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         """Generate quasi-random collocation points.
 
-        Points are cached for efficiency - same points used across iterations
-        unless num_points changes.
+        A fresh, non-overlapping section of the low-discrepancy sequence is
+        drawn each iteration so that Halton/Sobol resample on the same schedule
+        as all other methods (including random).
 
         Args:
             mesh: Mesh object for domain checking
@@ -112,21 +130,14 @@ class QuasiRandomMethod(TrainingMethod):
             num_points: Number of points. If None, matches mesh vertex count.
 
         Returns:
-            Tuple of (x, y) tensors
+            Tuple of tensors
         """
         if num_points is None:
             num_points = len(list(mesh.vertices))
 
-        # Use cached points if available and size matches
-        if self._cached_points is not None and self._cached_num_points == num_points:
-            points = self._cached_points
-        else:
-            points = self._generate_quasi_random_points(
-                num_points, mesh, iteration=iteration
-            )
-            self._cached_points = points
-            self._cached_num_points = num_points
-
+        points = self._generate_quasi_random_points(
+            num_points, mesh, iteration=iteration
+        )
         return points_to_tensors(points)
 
 
@@ -140,21 +151,21 @@ class HaltonMethod(QuasiRandomMethod):
     name = "halton"
     description = "Halton low-discrepancy sequence sampling"
 
-    def _create_sampler(self, seed: int):
+    def _create_sampler(self, seed: int, dim: int = 2):
         """Create Halton sampler."""
-        return qmc.Halton(d=2, seed=seed)
+        return qmc.Halton(d=dim, seed=seed)
 
 
 class SobolMethod(QuasiRandomMethod):
     """Sobol sequence sampling method.
 
-    The Sobol sequence is another low-discrepancy sequence with
-    excellent uniformity properties.
+    The Sobol sequence is another low-discrepancy sequence, often
+    providing slightly better uniformity than Halton for smaller point counts.
     """
 
     name = "sobol"
     description = "Sobol low-discrepancy sequence sampling"
 
-    def _create_sampler(self, seed: int):
+    def _create_sampler(self, seed: int, dim: int = 2):
         """Create Sobol sampler."""
-        return qmc.Sobol(d=2, seed=seed)
+        return qmc.Sobol(d=dim, seed=seed)

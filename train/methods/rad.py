@@ -83,25 +83,32 @@ class RADMethod(TrainingMethod):
     def _generate_candidate_points(
         self, mesh: Any, iteration: int | None = None
     ) -> np.ndarray:
-        """Generate dense candidate set using rejection sampling.
+        """Generate dense candidate set using rejection sampling."""
+        is_3d = getattr(mesh, 'dim', 2) == 3
 
-        Args:
-            mesh: NGSolve mesh for domain checking
+        if is_3d:
+            points_array = np.array([v.point for v in mesh.vertices])
+            mins = np.min(points_array, axis=0)
+            maxs = np.max(points_array, axis=0)
+            ranges = maxs - mins
 
-        Returns:
-            Array of shape (num_candidates, 2) with valid interior points
-        """
-        x_min, x_max, y_min, y_max = self.domain_bounds
+            def _batch_generator(batch_size):
+                return np.column_stack([
+                    self._rng.uniform(mins[i], maxs[i], size=batch_size)
+                    for i in range(3)
+                ])
+        else:
+            x_min, x_max, y_min, y_max = self.domain_bounds
+            def _batch_generator(batch_size):
+                return np.column_stack((
+                    self._rng.uniform(x_min, x_max, size=batch_size),
+                    self._rng.uniform(y_min, y_max, size=batch_size),
+                ))
 
         return sample_points_in_domain(
             mesh,
             self.num_candidates,
-            lambda batch_size: np.column_stack(
-                (
-                    self._rng.uniform(x_min, x_max, size=batch_size),
-                    self._rng.uniform(y_min, y_max, size=batch_size),
-                )
-            ),
+            _batch_generator,
             batch_size=max(512, self.num_candidates // 2),
             max_batches=40,
             warn_label="candidate points",
@@ -157,6 +164,13 @@ class RADMethod(TrainingMethod):
         # Convert to tensors
         x = torch.tensor(candidate_points[:, 0], dtype=torch.float32, device=DEVICE)
         y = torch.tensor(candidate_points[:, 1], dtype=torch.float32, device=DEVICE)
+        is_3d = candidate_points.shape[1] == 3
+        if is_3d:
+            z = torch.tensor(candidate_points[:, 2], dtype=torch.float32, device=DEVICE)
+            z.requires_grad_(True)
+        else:
+            z = None
+
         x.requires_grad_(True)
         y.requires_grad_(True)
         t = None
@@ -176,13 +190,17 @@ class RADMethod(TrainingMethod):
 
         # Compute PDE residual
         if self._problem is not None:
-            if t is None:
+            if is_3d:
+                residual = self._problem.pde_residual(model, x, y, z)
+            elif t is None:
                 residual = self._problem.pde_residual(model, x, y)
             else:
                 residual = self._problem.pde_residual(model, x, y, t)
         else:
             # Fallback: use model's built-in residual (for backward compatibility)
-            if t is None:
+            if is_3d:
+                residual = model.PDE_residual(x, y, z=z)
+            elif t is None:
                 residual = model.PDE_residual(x, y)
             else:
                 residual = model.PDE_residual(x, y, t)
@@ -294,7 +312,7 @@ class RADMethod(TrainingMethod):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         """Sample collocation points according to residual-based PDF.
 
         Args:
@@ -390,7 +408,9 @@ class RADMethod(TrainingMethod):
         points = self._cached_points
         return points_to_tensors(points)
 
-    def get_element_errors(self, mesh: Any, model: Any) -> np.ndarray:
+    def get_element_errors(
+        self, mesh: Any, model: Any, iteration: int = 0
+    ) -> np.ndarray:
         """Compute element-wise residual errors for visualization.
 
         Args:
@@ -407,8 +427,16 @@ class RADMethod(TrainingMethod):
 
         x = torch.tensor(self._cached_points[:, 0], dtype=torch.float32, device=DEVICE)
         y = torch.tensor(self._cached_points[:, 1], dtype=torch.float32, device=DEVICE)
+        is_3d = self._cached_points.shape[1] == 3
         x.requires_grad_(True)
         y.requires_grad_(True)
+        if is_3d:
+            z = torch.tensor(
+                self._cached_points[:, 2], dtype=torch.float32, device=DEVICE
+            )
+            z.requires_grad_(True)
+        else:
+            z = None
         t = None
         if (
             self._problem is not None
@@ -425,12 +453,16 @@ class RADMethod(TrainingMethod):
             )
 
         if self._problem is not None:
-            if t is None:
+            if is_3d:
+                residual = self._problem.pde_residual(model, x, y, z)
+            elif t is None:
                 residual = self._problem.pde_residual(model, x, y)
             else:
                 residual = self._problem.pde_residual(model, x, y, t)
         else:
-            if t is None:
+            if is_3d:
+                residual = model.PDE_residual(x, y, z=z)
+            elif t is None:
                 residual = model.PDE_residual(x, y)
             else:
                 residual = model.PDE_residual(x, y, t)

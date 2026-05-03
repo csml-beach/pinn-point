@@ -32,6 +32,7 @@ class PDEProblem(ABC):
     output_dim: int = 1
     output_names: tuple[str, ...] = ("u",)
     has_time_input: bool = False
+    has_spatial_3d: bool = False
 
     @abstractmethod
     def pde_residual(
@@ -245,6 +246,15 @@ class PDEProblem(ABC):
     def get_sampling_bounds(self) -> Tuple[float, float, float, float]:
         """Get the axis-aligned bounds used by collocation samplers."""
         return self.get_domain_bounds()
+
+    def get_spatial_bounds_nd(self) -> list:
+        """Get axis-aligned bounds per spatial dimension as [(min,max), ...].
+
+        For 2D problems, derived from get_domain_bounds().
+        3D problems should override this.
+        """
+        x_min, x_max, y_min, y_max = self.get_domain_bounds()
+        return [(x_min, x_max), (y_min, y_max)]
 
     def compute_derivative(
         self, u: torch.Tensor, var: torch.Tensor, order: int = 1

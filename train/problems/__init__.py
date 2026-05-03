@@ -35,6 +35,7 @@ Example:
 from .base import PDEProblem
 from .advection_diffusion import AdvectionDiffusionProblem
 from .allen_cahn_obstacles_2d import AllenCahnObstacles2DProblem
+from .elasticity_notched_cantilever_3d import ElasticityNotchedCantilever3DProblem
 from .navier_stokes_channel_obstacle import NavierStokesChannelObstacleProblem
 from .poisson import PoissonProblem
 from .poisson_ring import PoissonRingProblem
@@ -48,6 +49,7 @@ PROBLEM_REGISTRY = {
     "poisson_ring_hard": PoissonRingHardProblem,
     "advection_diffusion": AdvectionDiffusionProblem,
     "navier_stokes_channel_obstacle": NavierStokesChannelObstacleProblem,
+    "elasticity_notched_cantilever_3d": ElasticityNotchedCantilever3DProblem,
 }
 
 

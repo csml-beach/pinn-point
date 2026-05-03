@@ -81,10 +81,12 @@ def _method_seed(base_seed: int, method_name: str) -> int:
 
 def _build_initial_model_state(problem, vertex_array, base_seed: int):
     set_global_seed(base_seed)
-    mesh_x, mesh_y = vertex_array.T
-    prototype = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+    coords = vertex_array.T
+    mesh_x, mesh_y = coords[0], coords[1]
+    mesh_z = coords[2] if coords.shape[0] > 2 else None
+    prototype = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, mesh_z=mesh_z, problem=problem).to(DEVICE)
     state = copy.deepcopy(prototype.state_dict())
-    for mesh_buffer_key in ("mesh_x", "mesh_y", "mesh_t"):
+    for mesh_buffer_key in ("mesh_x", "mesh_y", "mesh_t", "mesh_z"):
         state.pop(mesh_buffer_key, None)
     del prototype
     return state
@@ -164,12 +166,23 @@ def _build_fixed_residual_validation_points(
     point_count = max(1, int(point_count))
 
     method = _build_method_instance("halton", problem, method_seed=int(seed) + 4099)
-    x, y = method.get_collocation_points(
+    _col_pts = method.get_collocation_points(
         mesh,
         model=None,
         iteration=0,
         num_points=point_count,
     )
+    if len(_col_pts) == 3:
+        x, y, _z_col = _col_pts
+    else:
+        x, y = _col_pts
+        _z_col = None
+
+    if getattr(problem, "has_spatial_3d", False):
+        if _z_col is None:
+            raise ValueError("3D validation residual points require z coordinates")
+        return x, y, _z_col
+
     return _augment_points_for_problem(
         problem,
         x,
@@ -179,6 +192,11 @@ def _build_fixed_residual_validation_points(
         seed=int(seed) + 4099,
         purpose="validation",
     )
+
+
+def _stack_coordinate_history(*coords):
+    valid_coords = [coord for coord in coords if coord is not None]
+    return torch.stack(valid_coords, dim=1).detach().cpu().clone()
 
 
 def _append_validation_history(model, validation_result):
@@ -432,12 +450,17 @@ def run_mesh_refinement_method_training_fair(
         set_global_seed(method_seed)
 
     current_mesh = initial_mesh
-    init_x, init_y = method.get_collocation_points(
+    _init_pts = method.get_collocation_points(
         current_mesh,
         model=None,
         iteration=0,
         num_points=collocation_budget,
     )
+    if len(_init_pts) == 3:
+        init_x, init_y, init_z = _init_pts
+    else:
+        init_x, init_y = _init_pts
+        init_z = None
     init_x, init_y, init_t = _augment_points_for_problem(
         problem,
         init_x,
@@ -450,7 +473,7 @@ def run_mesh_refinement_method_training_fair(
     print(f"Initial collocation budget: {len(init_x):,} points")
 
     model = FeedForward(
-        mesh_x=init_x, mesh_y=init_y, mesh_t=init_t, problem=problem
+        mesh_x=init_x, mesh_y=init_y, mesh_t=init_t, mesh_z=init_z, problem=problem
     ).to(DEVICE)
     if initial_state_dict is not None:
         model.load_state_dict(copy.deepcopy(initial_state_dict), strict=False)
@@ -461,7 +484,7 @@ def run_mesh_refinement_method_training_fair(
     model.reference_solution = reference_solution
 
     # Initialize tracking
-    initial_points = torch.stack([init_x, init_y], dim=1).detach().cpu().clone()
+    initial_points = _stack_coordinate_history(init_x, init_y, init_z)
     model.mesh_point_history = [initial_points]
     model.mesh_point_count_history = [len(init_x)]
 
@@ -475,12 +498,17 @@ def run_mesh_refinement_method_training_fair(
 
         print(f"\n--- {method_name} Iteration {iteration + 1} ---")
         if iteration > 0:
-            x, y = method.get_collocation_points(
+            _col_pts = method.get_collocation_points(
                 current_mesh,
                 model=model,
                 iteration=iteration,
                 num_points=collocation_budget,
             )
+            if len(_col_pts) == 3:
+                x, y, _z_col = _col_pts
+            else:
+                x, y = _col_pts
+                _z_col = None
             x, y, t = _augment_points_for_problem(
                 problem,
                 x,
@@ -490,8 +518,8 @@ def run_mesh_refinement_method_training_fair(
                 seed=method_seed,
                 purpose="train",
             )
-            model.set_mesh_points(x, y, mesh_t=t)
-            sampled_points = torch.stack([x, y], dim=1).detach().cpu().clone()
+            model.set_mesh_points(x, y, z=_z_col, mesh_t=t)
+            sampled_points = _stack_coordinate_history(x, y, _z_col)
             model.mesh_point_history.append(sampled_points)
             model.mesh_point_count_history.append(len(x))
 
@@ -656,7 +684,9 @@ def run_method_training_fair(
 
     # Get initial mesh coordinates
     vertex_array = export_vertex_coordinates(initial_mesh)
-    mesh_x, mesh_y = vertex_array.T
+    coords = vertex_array.T
+    mesh_x, mesh_y = coords[0], coords[1]
+    mesh_z = coords[2] if coords.shape[0] > 2 else None
     initial_point_count = len(mesh_x)
 
     print(f"Initial mesh: {initial_point_count:,} points")
@@ -664,12 +694,17 @@ def run_method_training_fair(
     # Initialize the model on the actual iteration-0 collocation set so the
     # fixed-budget method history starts from the same accepted-point budget
     # used in training.
-    initial_x, initial_y = method.get_collocation_points(
+    _init_pts = method.get_collocation_points(
         initial_mesh,
         model=None,
         iteration=0,
         num_points=collocation_budget,
     )
+    if len(_init_pts) == 3:
+        initial_x, initial_y, initial_z = _init_pts
+    else:
+        initial_x, initial_y = _init_pts
+        initial_z = None
     initial_x, initial_y, initial_t = _augment_points_for_problem(
         problem,
         initial_x,
@@ -685,6 +720,7 @@ def run_method_training_fair(
         mesh_x=initial_x,
         mesh_y=initial_y,
         mesh_t=initial_t,
+        mesh_z=initial_z,
         problem=problem,
     ).to(DEVICE)
     if initial_state_dict is not None:
@@ -695,7 +731,7 @@ def run_method_training_fair(
 
     # Initialize tracking histories from the actual method-specific collocation set,
     # not from the full initial mesh vertex list.
-    initial_points = torch.stack([initial_x, initial_y], dim=1).detach().cpu().clone()
+    initial_points = _stack_coordinate_history(initial_x, initial_y, initial_z)
     model.mesh_point_history = [initial_points]
     model.mesh_point_count_history = [len(initial_x)]
     model.total_error_history = []
@@ -713,12 +749,17 @@ def run_method_training_fair(
 
         if iteration > 0:
             # Get collocation points using the method
-            x, y = method.get_collocation_points(
+            _col_pts = method.get_collocation_points(
                 initial_mesh,
                 model=model,
                 iteration=iteration,
                 num_points=collocation_budget,
             )
+            if len(_col_pts) == 3:
+                x, y, _z_col = _col_pts
+            else:
+                x, y = _col_pts
+                _z_col = None
             x, y, t = _augment_points_for_problem(
                 problem,
                 x,
@@ -730,7 +771,7 @@ def run_method_training_fair(
             )
 
             # Update model's residual computation points
-            model.set_mesh_points(x, y, mesh_t=t)
+            model.set_mesh_points(x, y, z=_z_col, mesh_t=t)
 
         actual_count = len(model.mesh_x)
         print(f"Using {actual_count:,} {method_name} points for residual computation")
@@ -912,7 +953,10 @@ def run_complete_experiment(
     training_dataset, validation_dataset = _split_training_and_validation_dataset(
         shared_training_dataset, seed, validation_config
     )
-    mesh_x, mesh_y = vertex_array.T
+    _vcoords = vertex_array.T
+    mesh_x = _vcoords[0]
+    mesh_y = _vcoords[1]
+    _mesh_z_shared = _vcoords[2] if _vcoords.shape[0] > 2 else None
     shared_label_count = len(training_dataset)
     print(f"Shared training dataset: {shared_label_count:,} labels")
     collocation_budget = problem.get_collocation_budget(

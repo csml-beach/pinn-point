@@ -8,7 +8,11 @@ import numpy as np
 import torch
 
 from .adaptive_persistent import AdaptivePersistentMethod
-from .sampling import points_to_tensors, sample_uniform_points_in_triangle
+from .sampling import (
+    points_to_tensors,
+    sample_uniform_points_in_triangle,
+    sample_uniform_points_in_tetrahedron,
+)
 
 
 class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
@@ -195,12 +199,17 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
 
         alloc = self._deterministic_quota_alloc(probs, int(num_points))
         sampled_batches = []
-        for triangle, count in zip(triangles, alloc):
+        for element, count in zip(triangles, alloc):
             if count <= 0:
                 continue
-            sampled_batches.append(
-                sample_uniform_points_in_triangle(triangle, int(count), self._rng)
-            )
+            if element.shape == (4, 3):  # tet
+                sampled_batches.append(
+                    sample_uniform_points_in_tetrahedron(element, int(count), self._rng)
+                )
+            else:  # triangle
+                sampled_batches.append(
+                    sample_uniform_points_in_triangle(element, int(count), self._rng)
+                )
 
         if not sampled_batches:
             raise ValueError("power-tempered sampler produced zero collocation points")
@@ -214,7 +223,7 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         if num_points is None:
             num_points = len(list(mesh.vertices))
         self._active_iteration = int(iteration)
@@ -251,13 +260,20 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         refine_mask = np.zeros_like(smoothed_scores, dtype=bool)
         was_refined = False
         should_refine = ((iteration + 1) % self.refine_period) == 0
+        is_3d = getattr(mesh, 'dim', 2) == 3
         if max_refine_score > 0.0 and should_refine:
             refine_mask = smoothed_scores > self.refinement_threshold * max_refine_score
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
             was_refined = bool(np.any(refine_mask))
         else:
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
 
         (
             refined_triangles,
@@ -381,5 +397,16 @@ class AdaptivePowerTemperedFloor25Method(AdaptivePowerTemperedMethod):
 
     def __init__(
         self, *args: Any, coverage_floor: float = 0.25, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, coverage_floor=coverage_floor, **kwargs)
+
+class AdaptivePowerTemperedFloor95Method(AdaptivePowerTemperedMethod):
+    """Power-tempered sampler with a 95% true-area coverage floor (almost uniform)."""
+
+    name = "adaptive_power_tempered_floor95"
+    description = "Power-tempered adaptive residual sampling (coverage_floor=0.95)"
+
+    def __init__(
+        self, *args: Any, coverage_floor: float = 0.95, **kwargs: Any
     ) -> None:
         super().__init__(*args, coverage_floor=coverage_floor, **kwargs)

@@ -15,7 +15,11 @@ import torch
 from ngsolve import VOL
 
 from .base import TrainingMethod
-from .sampling import points_to_tensors, sample_uniform_points_in_triangle
+from .sampling import (
+    points_to_tensors,
+    sample_uniform_points_in_triangle,
+    sample_uniform_points_in_tetrahedron,
+)
 
 
 class AdaptiveMethod(TrainingMethod):
@@ -32,6 +36,15 @@ class AdaptiveMethod(TrainingMethod):
             [2.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0],
             [1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0],
             [1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0],
+        ],
+        dtype=float,
+    )
+    _QUADRATURE_BARYCENTRIC_TET = np.array(
+        [
+            [2.0 / 3.0, 1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0],
+            [1.0 / 9.0, 2.0 / 3.0, 1.0 / 9.0, 1.0 / 9.0],
+            [1.0 / 9.0, 1.0 / 9.0, 2.0 / 3.0, 1.0 / 9.0],
+            [1.0 / 9.0, 1.0 / 9.0, 1.0 / 9.0, 2.0 / 3.0],
         ],
         dtype=float,
     )
@@ -58,8 +71,10 @@ class AdaptiveMethod(TrainingMethod):
         self._last_refinement_stats: dict[str, float | int | bool] = {}
 
     def _extract_triangle_data(self, mesh: Any) -> tuple[np.ndarray, np.ndarray]:
-        triangles: list[np.ndarray] = []
-        areas: list[float] = []
+        """Extract element data (triangles or tets) with areas/volumes."""
+        is_3d = getattr(mesh, 'dim', 2) == 3
+        elements_data: list[np.ndarray] = []
+        measures: list[float] = []
         element_ids: list[int] = []
 
         for el in mesh.Elements(VOL):
@@ -67,30 +82,48 @@ class AdaptiveMethod(TrainingMethod):
             for vertex in el.vertices:
                 point = mesh[vertex].point
                 if hasattr(point, "x"):
-                    vertices.append((float(point.x), float(point.y)))
+                    if is_3d:
+                        vertices.append((float(point.x), float(point.y), float(point.z)))
+                    else:
+                        vertices.append((float(point.x), float(point.y)))
                 else:
-                    vertices.append((float(point[0]), float(point[1])))
+                    if is_3d:
+                        vertices.append((float(point[0]), float(point[1]), float(point[2])))
+                    else:
+                        vertices.append((float(point[0]), float(point[1])))
 
-            if len(vertices) != 3:
-                continue
+            if is_3d:
+                if len(vertices) != 4:
+                    continue
+                tet = np.asarray(vertices, dtype=float)  # (4, 3)
+                e1 = tet[1] - tet[0]
+                e2 = tet[2] - tet[0]
+                e3 = tet[3] - tet[0]
+                vol = abs(np.dot(e1, np.cross(e2, e3))) / 6.0
+                if vol <= 0.0:
+                    continue
+                elements_data.append(tet)
+                measures.append(float(vol))
+            else:
+                if len(vertices) != 3:
+                    continue
+                triangle = np.asarray(vertices, dtype=float)  # (3, 2)
+                edge_ab = triangle[1] - triangle[0]
+                edge_ac = triangle[2] - triangle[0]
+                area = 0.5 * abs(edge_ab[0] * edge_ac[1] - edge_ab[1] * edge_ac[0])
+                if area <= 0.0:
+                    continue
+                elements_data.append(triangle)
+                measures.append(float(area))
 
-            triangle = np.asarray(vertices, dtype=float)
-            edge_ab = triangle[1] - triangle[0]
-            edge_ac = triangle[2] - triangle[0]
-            area = 0.5 * abs(edge_ab[0] * edge_ac[1] - edge_ab[1] * edge_ac[0])
-            if area <= 0.0:
-                continue
-
-            triangles.append(triangle)
-            areas.append(float(area))
             element_ids.append(int(el.nr))
 
-        if not triangles:
-            raise ValueError("mesh does not contain any positive-area triangles")
+        if not elements_data:
+            raise ValueError("mesh does not contain any valid volume elements")
 
         return (
-            np.asarray(triangles, dtype=float),
-            np.asarray(areas, dtype=float),
+            np.asarray(elements_data, dtype=float),  # (E, 3, 2) or (E, 4, 3)
+            np.asarray(measures, dtype=float),
             np.asarray(element_ids, dtype=int),
         )
 
@@ -99,10 +132,15 @@ class AdaptiveMethod(TrainingMethod):
     ) -> list[list[int]]:
         id_to_local = {int(global_id): idx for idx, global_id in enumerate(element_ids)}
         neighbors: list[set[int]] = [set() for _ in range(len(element_ids))]
+        is_3d = getattr(mesh, 'dim', 2) == 3
 
-        for edge in mesh.edges:
+        # For 3D meshes, shared faces connect adjacent tets.
+        # For 2D meshes, shared edges connect adjacent triangles.
+        topology_iter = mesh.faces if is_3d else mesh.edges
+
+        for face_or_edge in topology_iter:
             adjacent_elements = []
-            for element_id in getattr(edge, "elements", ()):
+            for element_id in getattr(face_or_edge, "elements", ()):
                 try:
                     if element_id.VB() != VOL:
                         continue
@@ -149,15 +187,26 @@ class AdaptiveMethod(TrainingMethod):
         self, mesh: Any, model: Any, iteration: int = 0
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
         triangles, areas, element_ids = self._extract_triangle_data(mesh)
+        is_3d = getattr(mesh, 'dim', 2) == 3
 
-        bary = self._QUADRATURE_BARYCENTRIC
-        quad_points = np.einsum("qb,ebc->eqc", bary, triangles)
-        flat_points = quad_points.reshape(-1, 2)
+        if is_3d:
+            bary = self._QUADRATURE_BARYCENTRIC_TET  # (4, 4)
+            # triangles is (E, 4, 3)
+            quad_points = np.einsum("qb,ebc->eqc", bary, triangles)  # (E, 4, 3)
+            flat_points = quad_points.reshape(-1, 3)
+        else:
+            bary = self._QUADRATURE_BARYCENTRIC  # (3, 3)
+            quad_points = np.einsum("qb,ebc->eqc", bary, triangles)  # (E, 3, 2)
+            flat_points = quad_points.reshape(-1, 2)
 
-        x = torch.tensor(flat_points[:, 0], dtype=torch.float32, device=model.mesh_x.device)
-        y = torch.tensor(flat_points[:, 1], dtype=torch.float32, device=model.mesh_y.device)
+        device = model.mesh_x.device
+        x = torch.tensor(flat_points[:, 0], dtype=torch.float32, device=device)
+        y = torch.tensor(flat_points[:, 1], dtype=torch.float32, device=device)
         t = None
-        if getattr(model, "has_time_input", False) and getattr(self, "problem", None) is not None:
+        z = None
+        if is_3d:
+            z = torch.tensor(flat_points[:, 2], dtype=torch.float32, device=device)
+        elif getattr(model, "has_time_input", False) and getattr(self, "problem", None) is not None:
             _, _, t = self.problem.augment_collocation_points(
                 x,
                 y,
@@ -168,13 +217,16 @@ class AdaptiveMethod(TrainingMethod):
             )
 
         with torch.enable_grad():
-            if t is None:
+            if is_3d:
+                residual = model.PDE_residual(x, y, z=z)
+            elif t is None:
                 residual = model.PDE_residual(x, y)
             else:
                 residual = model.PDE_residual(x, y, t)
 
+        n_quad = len(bary)
         residual_sq = torch.square(residual).detach().cpu().numpy().reshape(
-            len(triangles), len(bary)
+            len(triangles), n_quad
         )
         pointwise_r2 = np.mean(residual_sq, axis=1)
         pointwise_r2 = np.nan_to_num(pointwise_r2, nan=0.0, posinf=0.0, neginf=0.0)
@@ -254,12 +306,17 @@ class AdaptiveMethod(TrainingMethod):
         total_alloc = adaptive_alloc + global_alloc
 
         sampled_batches = []
-        for triangle, count in zip(triangles, total_alloc):
+        for element, count in zip(triangles, total_alloc):
             if count <= 0:
                 continue
-            sampled_batches.append(
-                sample_uniform_points_in_triangle(triangle, int(count), self._rng)
-            )
+            if element.shape == (4, 3):  # tet
+                sampled_batches.append(
+                    sample_uniform_points_in_tetrahedron(element, int(count), self._rng)
+                )
+            else:  # triangle
+                sampled_batches.append(
+                    sample_uniform_points_in_triangle(element, int(count), self._rng)
+                )
 
         if not sampled_batches:
             raise ValueError("adaptive sampler produced zero collocation points")
@@ -272,7 +329,7 @@ class AdaptiveMethod(TrainingMethod):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         if num_points is None:
             num_points = len(mesh.vertices)
 
@@ -306,11 +363,20 @@ class AdaptiveMethod(TrainingMethod):
         should_refine = ((iteration + 1) % self.refine_period) == 0
         if max_score > 0.0 and should_refine:
             refine_mask = smoothed_scores > self.refinement_threshold * max_score
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            is_3d = getattr(mesh, 'dim', 2) == 3
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
             was_refined = bool(np.any(refine_mask))
         else:
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            refine_mask = np.zeros_like(smoothed_scores, dtype=bool)
+            is_3d = getattr(mesh, 'dim', 2) == 3
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
 
         (
             refined_triangles,

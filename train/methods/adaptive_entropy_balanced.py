@@ -9,6 +9,7 @@ import torch
 
 from .adaptive_persistent import AdaptivePersistentMethod
 from .sampling import points_to_tensors, sample_uniform_points_in_triangle
+from .sampling import sample_uniform_points_in_tetrahedron
 
 
 class AdaptiveEntropyBalancedMethod(AdaptivePersistentMethod):
@@ -170,12 +171,17 @@ class AdaptiveEntropyBalancedMethod(AdaptivePersistentMethod):
 
         alloc = self._deterministic_quota_alloc(probs, int(num_points))
         sampled_batches = []
-        for triangle, count in zip(triangles, alloc):
+        for element, count in zip(triangles, alloc):
             if count <= 0:
                 continue
-            sampled_batches.append(
-                sample_uniform_points_in_triangle(triangle, int(count), self._rng)
-            )
+            if element.shape == (4, 3):
+                sampled_batches.append(
+                    sample_uniform_points_in_tetrahedron(element, int(count), self._rng)
+                )
+            else:
+                sampled_batches.append(
+                    sample_uniform_points_in_triangle(element, int(count), self._rng)
+                )
 
         if not sampled_batches:
             raise ValueError("entropy-balanced sampler produced zero collocation points")
@@ -189,7 +195,7 @@ class AdaptiveEntropyBalancedMethod(AdaptivePersistentMethod):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         if num_points is None:
             num_points = len(list(mesh.vertices))
         self._active_iteration = int(iteration)
@@ -227,11 +233,17 @@ class AdaptiveEntropyBalancedMethod(AdaptivePersistentMethod):
         should_refine = ((iteration + 1) % self.refine_period) == 0
         if max_refine_score > 0.0 and should_refine:
             refine_mask = smoothed_scores > self.refinement_threshold * max_refine_score
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if getattr(mesh, 'dim', 2) == 3:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
             was_refined = bool(np.any(refine_mask))
         else:
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if getattr(mesh, 'dim', 2) == 3:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
 
         (
             refined_triangles,

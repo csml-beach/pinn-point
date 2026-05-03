@@ -80,10 +80,14 @@ def create_dataset(vertex_array, solution_array):
 
     Args:
         vertex_array: Tensor of vertex coordinates
-        solution_array: Tensor of solution values
+        solution_array: Tensor of solution values (scalar or vector)
 
     Returns:
         TensorDataset: PyTorch dataset containing the data
     """
-    dataset = TensorDataset(vertex_array, solution_array.reshape(-1, 1))
+    sol = solution_array
+    if sol.ndim == 1:
+        sol = sol.reshape(-1, 1)
+    # If already (N, D) with D>1, keep shape; otherwise ensure (N,1)
+    dataset = TensorDataset(vertex_array, sol)
     return dataset

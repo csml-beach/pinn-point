@@ -30,13 +30,19 @@ Example:
 from .base import TrainingMethod
 from .adaptive import AdaptiveMethod
 from .adaptive_entropy_balanced import AdaptiveEntropyBalancedMethod
-from .adaptive_halton_base import AdaptiveHaltonBaseMethod
-from .adaptive_persistent import AdaptivePersistentMethod
+from .adaptive_halton_base import (
+    AdaptiveHaltonBaseMethod,
+    AdaptiveHaltonBase95Method,
+)
+from .adaptive_persistent import (
+    AdaptivePersistentMethod,
+)
 from .adaptive_power_tempered import (
     AdaptivePowerTemperedBeta25Method,
     AdaptivePowerTemperedBeta30Method,
     AdaptivePowerTemperedFloor15Method,
     AdaptivePowerTemperedFloor25Method,
+    AdaptivePowerTemperedFloor95Method,
     AdaptivePowerTemperedMethod,
 )
 from .hybrid_anchor import AdaptiveHybridAnchorMethod
@@ -49,12 +55,14 @@ METHOD_REGISTRY = {
     "adaptive": AdaptiveMethod,
     "adaptive_entropy_balanced": AdaptiveEntropyBalancedMethod,
     "adaptive_halton_base": AdaptiveHaltonBaseMethod,
+    "adaptive_halton_base_95": AdaptiveHaltonBase95Method,
     "adaptive_persistent": AdaptivePersistentMethod,
     "adaptive_power_tempered": AdaptivePowerTemperedMethod,
     "adaptive_power_tempered_beta25": AdaptivePowerTemperedBeta25Method,
     "adaptive_power_tempered_beta30": AdaptivePowerTemperedBeta30Method,
     "adaptive_power_tempered_floor15": AdaptivePowerTemperedFloor15Method,
     "adaptive_power_tempered_floor25": AdaptivePowerTemperedFloor25Method,
+    "adaptive_power_tempered_floor95": AdaptivePowerTemperedFloor95Method,
     "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,
     "halton": HaltonMethod,

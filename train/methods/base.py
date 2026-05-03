@@ -35,7 +35,7 @@ class TrainingMethod(ABC):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         """Get collocation points for PDE residual evaluation.
 
         Args:
@@ -45,7 +45,7 @@ class TrainingMethod(ABC):
             num_points: Desired collocation budget
 
         Returns:
-            Tuple of (x, y) tensors containing point coordinates
+            Tuple of coordinate tensors, usually (x, y) or (x, y, z)
         """
         pass
 

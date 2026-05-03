@@ -14,7 +14,7 @@ from config import DEVICE, MODEL_CONFIG
 class FeedForward(nn.Module):
     """Physics-Informed Neural Network for solving PDEs with adaptive mesh refinement."""
 
-    def __init__(self, mesh_x, mesh_y, problem, mesh_t=None):
+    def __init__(self, mesh_x, mesh_y, problem, mesh_t=None, mesh_z=None):
         """Initialize the PINN model.
 
         Args:
@@ -22,6 +22,7 @@ class FeedForward(nn.Module):
             mesh_y: y-coordinates of mesh points
             problem: PDEProblem driving residual and boundary losses
             mesh_t: Optional time coordinates for transient problems
+            mesh_z: Optional z-coordinates for 3D spatial problems
         """
         super(FeedForward, self).__init__()
 
@@ -87,7 +88,8 @@ class FeedForward(nn.Module):
         self.register_buffer("mesh_x", torch.empty(0, dtype=torch.float32))
         self.register_buffer("mesh_y", torch.empty(0, dtype=torch.float32))
         self.register_buffer("mesh_t", torch.empty(0, dtype=torch.float32))
-        self.set_mesh_points(mesh_x, mesh_y, mesh_t=mesh_t)
+        self.register_buffer("mesh_z", torch.empty(0, dtype=torch.float32))
+        self.set_mesh_points(mesh_x, mesh_y, z=mesh_z, mesh_t=mesh_t)
 
         # Cache the training dataset on the active device once per model.
         self._cached_dataset_id = None
@@ -109,10 +111,17 @@ class FeedForward(nn.Module):
 
         return t_min + (t_max - t_min) * torch.rand(int(count), dtype=torch.float32, device=device)
 
-    def set_mesh_points(self, mesh_x, mesh_y, mesh_t=None):
+    def set_mesh_points(self, mesh_x, mesh_y, z=None, mesh_t=None):
         """Update collocation points on the configured runtime device."""
         self.mesh_x = torch.as_tensor(mesh_x, dtype=torch.float32, device=DEVICE)
         self.mesh_y = torch.as_tensor(mesh_y, dtype=torch.float32, device=DEVICE)
+        if getattr(self.problem, 'has_spatial_3d', False):
+            if z is None:
+                self.mesh_z = torch.zeros_like(self.mesh_x)
+            else:
+                self.mesh_z = torch.as_tensor(z, dtype=torch.float32, device=DEVICE)
+        else:
+            self.mesh_z = torch.empty(0, dtype=torch.float32, device=DEVICE)
         if self.has_time_input:
             if mesh_t is None:
                 self.mesh_t = self._default_time_coordinates(len(self.mesh_x), device=DEVICE)
@@ -202,7 +211,7 @@ class FeedForward(nn.Module):
             )[0]
             return self.compute_derivative(du_dx, x, n - 1)
 
-    def PDE_residual(self, x, y, t=None, use_meshgrid=False):
+    def PDE_residual(self, x, y, t=None, z=None, use_meshgrid=False):
         """Compute the PDE residual for the Poisson equation: ∇²u + f = 0.
 
         NOTE: This is the default Poisson problem implementation.
@@ -234,6 +243,9 @@ class FeedForward(nn.Module):
             if t is None:
                 t = self._default_time_coordinates(len(x), device=torch.as_tensor(x, device=DEVICE).device)
             return self.problem.pde_residual(self, x, y, t)
+
+        if getattr(self.problem, 'has_spatial_3d', False):
+            return self.problem.pde_residual(self, x, y, z)
 
         return self.problem.pde_residual(self, x, y)
 
@@ -267,6 +279,8 @@ class FeedForward(nn.Module):
         """
         if self.has_time_input:
             res = self.PDE_residual(self.mesh_x, self.mesh_y, self.mesh_t)
+        elif getattr(self.problem, 'has_spatial_3d', False):
+            res = self.PDE_residual(self.mesh_x, self.mesh_y, z=self.mesh_z)
         else:
             res = self.PDE_residual(self.mesh_x, self.mesh_y)
         loss_residual = torch.mean(torch.square(res))
@@ -277,13 +291,20 @@ class FeedForward(nn.Module):
         coords = tuple(coord for coord in coords if coord is not None)
 
         if len(coords) not in (2, 3):
-            raise ValueError("loss_interior_on_points expects (x, y) or (x, y, t)")
+            raise ValueError(
+                "loss_interior_on_points expects (x, y) or (x, y, t) or (x, y, z)"
+            )
+        if getattr(self.problem, 'has_spatial_3d', False) and len(coords) != 3:
+            raise ValueError("3D residual validation requires (x, y, z) points")
 
         prepared = [
             torch.as_tensor(coord, dtype=torch.float32, device=DEVICE) for coord in coords
         ]
         if len(prepared) == 3:
-            res = self.PDE_residual(prepared[0], prepared[1], prepared[2])
+            if getattr(self.problem, 'has_spatial_3d', False):
+                res = self.PDE_residual(prepared[0], prepared[1], z=prepared[2])
+            else:
+                res = self.PDE_residual(prepared[0], prepared[1], prepared[2])
         else:
             res = self.PDE_residual(prepared[0], prepared[1])
         return torch.mean(torch.square(res))

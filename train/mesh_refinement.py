@@ -219,7 +219,10 @@ def _ensure_reference_residual_scales(model, reference_mesh, ref_coords=None):
         if ref_coords is None:
             ref_coords = export_vertex_coordinates(reference_mesh)
         try:
-            ref_x, ref_y = ref_coords.unbind(1)
+            if ref_coords.shape[1] >= 3:
+                ref_x, ref_y = ref_coords[:, 0], ref_coords[:, 1]
+            else:
+                ref_x, ref_y = ref_coords.unbind(1)
         except Exception:
             ref_x = ref_coords[:, 0]
             ref_y = ref_coords[:, 1]
@@ -417,6 +420,9 @@ def compute_model_residual_on_reference_quadrature(
         domain_area = float("nan")
 
     # Mesh-based per-element accumulation using the documented NGSolve mesh API.
+    is_3d = getattr(reference_mesh, 'dim', 2) == 3
+    problem = getattr(model, "problem", None)
+    has_3d = is_3d or (problem is not None and getattr(problem, 'has_spatial_3d', False))
     try:
         total = 0.0
         area_sum = 0.0
@@ -425,34 +431,54 @@ def compute_model_residual_on_reference_quadrature(
             for v in el.vertices:
                 p = reference_mesh[v].point
                 if hasattr(p, "x"):
-                    verts.append((float(p.x), float(p.y)))
+                    if has_3d:
+                        verts.append((float(p.x), float(p.y), float(p.z)))
+                    else:
+                        verts.append((float(p.x), float(p.y)))
                 else:
-                    verts.append((float(p[0]), float(p[1])))
-            if len(verts) != 3:
-                continue
-            (x1, y1), (x2, y2), (x3, y3) = verts
-            area = abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) * 0.5
+                    if has_3d:
+                        verts.append((float(p[0]), float(p[1]), float(p[2])))
+                    else:
+                        verts.append((float(p[0]), float(p[1])))
+            if has_3d:
+                if len(verts) != 4:
+                    continue
+                tet = np.asarray(verts)
+                e1, e2, e3 = tet[1]-tet[0], tet[2]-tet[0], tet[3]-tet[0]
+                area = abs(np.dot(e1, np.cross(e2, e3))) / 6.0
+            else:
+                if len(verts) != 3:
+                    continue
+                (x1, y1), (x2, y2), (x3, y3) = verts
+                area = abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) * 0.5
             if area <= 0:
                 continue
 
             # Evaluate residual at vertices
             r2_vals = []
-            for xq, yq in ((x1, y1), (x2, y2), (x3, y3)):
-                tx = torch.tensor(
-                    [xq], dtype=torch.float32, device=DEVICE, requires_grad=True
-                )
-                ty = torch.tensor(
-                    [yq], dtype=torch.float32, device=DEVICE, requires_grad=True
-                )
-                with torch.enable_grad():
-                    if hasattr(model, "PDE_residual"):
-                        rq = model.PDE_residual(tx, ty)
-                    elif hasattr(model, "pde_residual"):
-                        coords = torch.stack([tx, ty], dim=1).requires_grad_(True)
-                        rq = model.pde_residual(coords)
-                    else:
-                        raise AttributeError("Model missing PDE_residual/pde_residual")
-                r2_val = float((rq * rq).detach().cpu().numpy().reshape(-1)[0])
+            for pt in verts:
+                if has_3d:
+                    tx = torch.tensor([pt[0]], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                    ty = torch.tensor([pt[1]], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                    tz = torch.tensor([pt[2]], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                    with torch.enable_grad():
+                        if hasattr(model, "PDE_residual"):
+                            rq = model.PDE_residual(tx, ty, z=tz)
+                        else:
+                            raise AttributeError("Model missing PDE_residual")
+                else:
+                    xq, yq = pt
+                    tx = torch.tensor([xq], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                    ty = torch.tensor([yq], dtype=torch.float32, device=DEVICE, requires_grad=True)
+                    with torch.enable_grad():
+                        if hasattr(model, "PDE_residual"):
+                            rq = model.PDE_residual(tx, ty)
+                        elif hasattr(model, "pde_residual"):
+                            coords = torch.stack([tx, ty], dim=1).requires_grad_(True)
+                            rq = model.pde_residual(coords)
+                        else:
+                            raise AttributeError("Model missing PDE_residual/pde_residual")
+                r2_val = float((rq * rq).sum().detach().cpu().item())
                 if np.isfinite(r2_val):
                     r2_vals.append(r2_val)
 
@@ -579,22 +605,45 @@ def compute_model_residual_rms_on_reference(model, reference_mesh, iteration=Non
     """
     # Get coordinates as tensors
     ref_coords = export_vertex_coordinates(reference_mesh)
+    problem = getattr(model, "problem", None)
+    has_3d = getattr(reference_mesh, 'dim', 2) == 3 or bool(
+        getattr(problem, "has_spatial_3d", False)
+    )
     try:
-        ref_x, ref_y = ref_coords.unbind(1)
+        if has_3d:
+            ref_x, ref_y, ref_z = ref_coords.unbind(1)
+        else:
+            ref_x, ref_y = ref_coords.unbind(1)
+            ref_z = None
         tx, ty = ref_x.to(DEVICE).float(), ref_y.to(DEVICE).float()
+        tz = ref_z.to(DEVICE).float() if ref_z is not None else None
     except Exception:
         import torch as _torch
 
         tx = _torch.tensor(ref_coords[:, 0], dtype=_torch.float32, device=DEVICE)
         ty = _torch.tensor(ref_coords[:, 1], dtype=_torch.float32, device=DEVICE)
+        tz = (
+            _torch.tensor(ref_coords[:, 2], dtype=_torch.float32, device=DEVICE)
+            if has_3d
+            else None
+        )
 
     tx.requires_grad_(True)
     ty.requires_grad_(True)
+    if tz is not None:
+        tz.requires_grad_(True)
     with torch.enable_grad():
         if hasattr(model, "PDE_residual"):
-            r = model.PDE_residual(tx, ty)
+            if has_3d:
+                r = model.PDE_residual(tx, ty, z=tz)
+            else:
+                r = model.PDE_residual(tx, ty)
         elif hasattr(model, "pde_residual"):
-            coords = torch.stack([tx, ty], dim=1).requires_grad_(True)
+            coords = (
+                torch.stack([tx, ty, tz], dim=1).requires_grad_(True)
+                if has_3d
+                else torch.stack([tx, ty], dim=1).requires_grad_(True)
+            )
             r = model.pde_residual(coords)
         else:
             raise AttributeError("Model does not expose PDE_residual or pde_residual")
@@ -639,17 +688,34 @@ def compute_model_error_rms_on_reference(
     """
     # Coordinates
     ref_coords = export_vertex_coordinates(reference_mesh)
+    problem = getattr(model, "problem", None)
+    has_3d = getattr(reference_mesh, 'dim', 2) == 3 or bool(
+        getattr(problem, "has_spatial_3d", False)
+    )
     try:
-        ref_x, ref_y = ref_coords.unbind(1)
+        if has_3d:
+            ref_x, ref_y, ref_z = ref_coords.unbind(1)
+        else:
+            ref_x, ref_y = ref_coords.unbind(1)
+            ref_z = None
         tx, ty = ref_x.to(DEVICE).float(), ref_y.to(DEVICE).float()
+        tz = ref_z.to(DEVICE).float() if ref_z is not None else None
     except Exception:
         import torch as _torch
 
         tx = _torch.tensor(ref_coords[:, 0], dtype=_torch.float32, device=DEVICE)
         ty = _torch.tensor(ref_coords[:, 1], dtype=_torch.float32, device=DEVICE)
+        tz = (
+            _torch.tensor(ref_coords[:, 2], dtype=_torch.float32, device=DEVICE)
+            if has_3d
+            else None
+        )
 
     with torch.no_grad():
-        u_pred = model.forward(tx, ty).detach().cpu().numpy().reshape(-1)
+        if has_3d:
+            u_pred = model.forward(tx, ty, tz).detach().cpu().numpy().reshape(-1)
+        else:
+            u_pred = model.forward(tx, ty).detach().cpu().numpy().reshape(-1)
 
     # Reference solution at dofs; assume P1 => dofs ~ vertices
     try:
@@ -1048,7 +1114,9 @@ def compute_random_residuals(
     from fem_solver import export_vertex_coordinates
 
     mesh_coords = export_vertex_coordinates(initial_mesh)
-    mesh_x, mesh_y = mesh_coords.T
+    _mc = mesh_coords.T if hasattr(mesh_coords, 'T') else mesh_coords.numpy().T
+    mesh_x = _mc[0]
+    mesh_y = _mc[1]
 
     # Simple interpolation: find nearest random point for each mesh point
     import numpy as np

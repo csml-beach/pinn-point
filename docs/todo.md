@@ -14,6 +14,7 @@ This file tracks follow-ups that should be revisited after the current refactor 
 - [ ] Decouple geometry selection from the current hardcoded perforated square domain in `train/geometry.py` so problems can own their own domain construction.
 - [ ] Fold the current remote submission workflow into the repo docs and experiment workflow, using the sibling toolkit at `../remote-ops/pinn-point/README.md` as the current reference instead of the missing `docs/remote_experiment_plan.md`.
 - [ ] Rerun the Poisson benchmark with `adaptive_persistent` and the current validation/checkpoint policy. The stored Poisson screens predate the persistence-based adaptive method, so the Poisson comparison is not yet aligned with the current adaptive mainline.
+- [ ] **Decide on Halton comparison strategy for paper**: the 2D results (all runs before 2026-04-30) used a cached-Halton (same points every iteration). Fixed in commit after `f43c0b7`. Options: (a) rerun 2D experiments with resampling Halton for a fair comparison, (b) relabel the old Halton results as "static Halton" and add a note. Old outputs are recoverable via `git checkout f43c0b7 -- outputs.dvc && dvc checkout`. See `docs/results.md` for full details.
 
 ## Next Round: RAD Stability
 

@@ -42,6 +42,7 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         self._anchor_values: torch.Tensor | None = None
         self._anchor_x_device: torch.Tensor | None = None
         self._anchor_y_device: torch.Tensor | None = None
+        self._anchor_z_device: torch.Tensor | None = None
         self._anchor_values_device: torch.Tensor | None = None
 
     def initialize_run_state(
@@ -53,15 +54,26 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         if fem_solution is None:
             raise ValueError("Hybrid adaptive method requires an initial FEM solution")
 
-        x_min, x_max, y_min, y_max = self.domain_bounds
+        problem = getattr(self, "problem", None)
+        is_3d = bool(getattr(problem, "has_spatial_3d", False)) or getattr(
+            initial_mesh, "dim", 2
+        ) == 3
+        if is_3d and problem is not None and hasattr(problem, "get_spatial_bounds_nd"):
+            spatial_bounds = problem.get_spatial_bounds_nd()
+        else:
+            x_min, x_max, y_min, y_max = self.domain_bounds
+            spatial_bounds = [(x_min, x_max), (y_min, y_max)]
+        mins = np.array([b[0] for b in spatial_bounds], dtype=float)
+        maxs = np.array([b[1] for b in spatial_bounds], dtype=float)
+
         points = sample_points_in_domain(
             initial_mesh,
             self.anchor_count,
             lambda batch_size: np.column_stack(
-                (
-                    self._rng.uniform(x_min, x_max, size=batch_size),
-                    self._rng.uniform(y_min, y_max, size=batch_size),
-                )
+                [
+                    self._rng.uniform(mins[i], maxs[i], size=batch_size)
+                    for i in range(len(spatial_bounds))
+                ]
             ),
             batch_size=max(256, self.anchor_count * 4),
             max_batches=40,
@@ -71,20 +83,32 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         )
 
         values = []
-        for x_coord, y_coord in points:
+        for row in points:
             try:
-                values.append(float(fem_solution(initial_mesh(float(x_coord), float(y_coord)))))
+                if is_3d:
+                    val = fem_solution(
+                        initial_mesh(float(row[0]), float(row[1]), float(row[2]))
+                    )
+                else:
+                    val = fem_solution(initial_mesh(float(row[0]), float(row[1])))
             except TypeError:
-                values.append(float(fem_solution(float(x_coord), float(y_coord))))
+                val = fem_solution(*[float(coord) for coord in row])
+            if isinstance(val, (tuple, list)) or hasattr(val, "__len__"):
+                values.append([float(component) for component in val])
+            else:
+                values.append(float(val))
 
         self._anchor_points = points.astype(float, copy=False)
         self._anchor_values = torch.tensor(values, dtype=torch.float32)
         self._anchor_x_device = None
         self._anchor_y_device = None
+        self._anchor_z_device = None
         self._anchor_values_device = None
         print(f"Initialized fixed hybrid anchor set with {len(points):,} points")
 
-    def _get_anchor_tensors(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _get_anchor_tensors(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor]:
         if self._anchor_points is None or self._anchor_values is None:
             raise RuntimeError("Hybrid anchor set has not been initialized")
         if (
@@ -98,14 +122,32 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
             self._anchor_y_device = torch.tensor(
                 self._anchor_points[:, 1], dtype=torch.float32, device=DEVICE
             )
+            if self._anchor_points.shape[1] == 3:
+                self._anchor_z_device = torch.tensor(
+                    self._anchor_points[:, 2], dtype=torch.float32, device=DEVICE
+                )
+            else:
+                self._anchor_z_device = None
             self._anchor_values_device = self._anchor_values.to(DEVICE)
-        return self._anchor_x_device, self._anchor_y_device, self._anchor_values_device
+        return (
+            self._anchor_x_device,
+            self._anchor_y_device,
+            self._anchor_z_device,
+            self._anchor_values_device,
+        )
 
     def _compute_anchor_point_errors(self, model: Any) -> np.ndarray:
-        anchor_x, anchor_y, anchor_values = self._get_anchor_tensors()
+        anchor_x, anchor_y, anchor_z, anchor_values = self._get_anchor_tensors()
         with torch.no_grad():
-            pred = model.forward(anchor_x, anchor_y).reshape(-1)
-        errors = torch.square(pred - anchor_values).detach().cpu().numpy()
+            if anchor_z is None:
+                pred = model.forward(anchor_x, anchor_y)
+            else:
+                pred = model.forward(anchor_x, anchor_y, anchor_z)
+        if anchor_values.ndim == 1:
+            errors = torch.square(pred.reshape(-1) - anchor_values)
+        else:
+            errors = torch.sum(torch.square(pred - anchor_values), dim=1)
+        errors = errors.detach().cpu().numpy()
         return np.clip(errors, 0.0, None)
 
     def _aggregate_anchor_errors_to_elements(
@@ -119,9 +161,13 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         element_counts = np.zeros(num_elements, dtype=float)
         assigned = 0
 
-        for (x_coord, y_coord), error_value in zip(self._anchor_points, point_errors):
+        is_3d = self._anchor_points.shape[1] == 3
+        for row, error_value in zip(self._anchor_points, point_errors):
             try:
-                element_nr = int(mesh(float(x_coord), float(y_coord)).nr)
+                if is_3d:
+                    element_nr = int(mesh(float(row[0]), float(row[1]), float(row[2])).nr)
+                else:
+                    element_nr = int(mesh(float(row[0]), float(row[1])).nr)
             except Exception:
                 continue
             if 0 <= element_nr < num_elements:
@@ -155,8 +201,8 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         return clipped / (scale + 1e-12), scale
 
     def refine_mesh(self, mesh: Any, model: Any, iteration: int = 0):
-        _, areas, residual_scores, total_residual = self._evaluate_residual_scores(
-            mesh, model
+        _, areas, _, residual_scores, total_residual = self._evaluate_residual_scores(
+            mesh, model, iteration=iteration
         )
         if not hasattr(model, "total_residual_history"):
             model.total_residual_history = []
@@ -177,16 +223,22 @@ class AdaptiveHybridAnchorMethod(AdaptiveMethod):
         max_score = float(np.max(score)) if score.size else 0.0
         if max_score > 0.0:
             refine_mask = score > self.refinement_threshold * max_score
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if getattr(mesh, 'dim', 2) == 3:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
             was_refined = bool(refine_mask.any())
         else:
             refine_mask = np.zeros_like(score, dtype=bool)
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if getattr(mesh, 'dim', 2) == 3:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             was_refined = False
 
-        refined_triangles, refined_areas, refined_residual_scores, _ = (
-            self._evaluate_residual_scores(mesh, model)
+        refined_triangles, refined_areas, _, refined_residual_scores, _ = (
+            self._evaluate_residual_scores(mesh, model, iteration=iteration)
         )
         refined_anchor_errors, refined_assigned_anchor_points = (
             self._aggregate_anchor_errors_to_elements(mesh, point_errors)

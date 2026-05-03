@@ -44,20 +44,31 @@ def _log_sampling_stats(
 def filter_points_in_domain(
     mesh: Any, candidate_points: np.ndarray, limit: int | None = None
 ) -> np.ndarray:
-    """Keep only candidate points that lie inside the mesh domain."""
-    accepted: list[tuple[float, float]] = []
+    """Keep only candidate points that lie inside the mesh domain.
 
-    for x_coord, y_coord in np.asarray(candidate_points, dtype=float):
+    Supports both 2D (N,2) and 3D (N,3) candidate arrays.
+    """
+    candidates = np.asarray(candidate_points, dtype=float)
+    if candidates.ndim != 2 or candidates.shape[1] not in (2, 3):
+        raise ValueError("candidate_points must have shape (N, 2) or (N, 3)")
+    ndim = candidates.shape[1]
+    accepted: list[tuple] = []
+
+    for row in candidates:
         try:
-            if mesh(float(x_coord), float(y_coord)).nr != -1:
-                accepted.append((float(x_coord), float(y_coord)))
+            if ndim == 3:
+                pt = mesh(float(row[0]), float(row[1]), float(row[2]))
+            else:
+                pt = mesh(float(row[0]), float(row[1]))
+            if pt.nr != -1:
+                accepted.append(tuple(row))
                 if limit is not None and len(accepted) >= limit:
                     break
         except Exception:
             continue
 
     if not accepted:
-        return np.empty((0, 2), dtype=float)
+        return np.empty((0, ndim), dtype=float)
     return np.asarray(accepted, dtype=float)
 
 
@@ -83,8 +94,8 @@ def sample_points_in_domain(
 
     for _ in range(max_batches):
         candidates = np.asarray(batch_generator(batch_size), dtype=float)
-        if candidates.ndim != 2 or candidates.shape[1] != 2:
-            raise ValueError("batch_generator must return an array of shape (N, 2)")
+        if candidates.ndim != 2 or candidates.shape[1] not in (2, 3):
+            raise ValueError("batch_generator must return an array of shape (N, 2) or (N, 3)")
         generated_count += len(candidates)
 
         accepted = filter_points_in_domain(
@@ -115,15 +126,18 @@ def sample_points_in_domain(
     return points
 
 
-def points_to_tensors(points: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
-    """Convert an (N, 2) point array to float tensors."""
+def points_to_tensors(
+    points: np.ndarray,
+) -> tuple[torch.Tensor, ...]:
+    """Convert an (N, 2) or (N, 3) point array to float tensors."""
     points = np.asarray(points, dtype=float)
-    if points.ndim != 2 or points.shape[1] != 2 or len(points) == 0:
-        raise ValueError("points must be a non-empty array of shape (N, 2)")
-    return (
-        torch.tensor(points[:, 0], dtype=torch.float32),
-        torch.tensor(points[:, 1], dtype=torch.float32),
+    if points.ndim != 2 or points.shape[1] not in (2, 3) or len(points) == 0:
+        raise ValueError("points must be a non-empty array of shape (N, 2) or (N, 3)")
+    tensors = tuple(
+        torch.tensor(points[:, i], dtype=torch.float32)
+        for i in range(points.shape[1])
     )
+    return tensors
 
 
 def sample_uniform_points_in_triangle(
@@ -153,3 +167,29 @@ def sample_uniform_points_in_triangle(
     edge_ab = triangle[1] - vertex_a
     edge_ac = triangle[2] - vertex_a
     return vertex_a + uv[:, :1] * edge_ab + uv[:, 1:] * edge_ac
+
+
+def sample_uniform_points_in_tetrahedron(
+    tet: np.ndarray, count: int, rng: np.random.RandomState
+) -> np.ndarray:
+    """Sample points uniformly inside a tetrahedron using barycentric coordinates.
+
+    Args:
+        tet: Array of shape (4, 3) with tetrahedron vertices
+        count: Number of interior points to sample
+        rng: Random number generator
+
+    Returns:
+        Array of shape (count, 3)
+    """
+    tet = np.asarray(tet, dtype=float)
+    if tet.shape != (4, 3):
+        raise ValueError("tet must have shape (4, 3)")
+    if count <= 0:
+        return np.empty((0, 3), dtype=float)
+
+    # Generate uniform barycentric coordinates via exponential distribution trick
+    # (equivalent to uniform on tetrahedron)
+    raw = -np.log(rng.uniform(1e-10, 1.0, size=(count, 4)))
+    bary = raw / raw.sum(axis=1, keepdims=True)  # (count, 4), sums to 1
+    return bary @ tet  # (count, 3)

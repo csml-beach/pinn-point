@@ -1,6 +1,28 @@
 # Current Results Summary
 
-## Clean 5-Method Paper Runs (2026-04-28) ← USE THESE FOR PAPER
+## ⚠ Halton Caching Bug — Important Context for All Pre-2026-04-30 Results
+
+Discovered 2026-04-30: `train/methods/quasi_random.py` cached the first-iteration
+collocation points and reused them unchanged for every subsequent iteration. This means
+`halton` (and `sobol`) were effectively **static fixed-grid** methods in all runs below,
+while `random` and all adaptive methods resampled each iteration. The results are still
+internally consistent and the ranking between adaptive methods is unaffected, but the
+`halton` vs. `random` comparison is confounded — Halton was not being tested as
+"a better resampling strategy" but as "sample once and freeze."
+
+**Fix**: committed after `f43c0b7` — each iteration now draws a fresh non-overlapping
+section of the Halton sequence via `fast_forward(iteration * batch_size)`.
+
+**To recover old (cached-Halton) outputs via DVC**:
+```bash
+git checkout f43c0b7 -- outputs.dvc train/methods/quasi_random.py
+dvc checkout outputs.dvc
+```
+The old outputs are fully cached in the local DVC store (`pinn-point-dvc-storage/`).
+
+---
+
+## Clean 5-Method Paper Runs (2026-04-28) ← USE THESE FOR PAPER (cached-Halton behavior)
 
 Definitive paper-facing runs with all 5 methods in a **single run directory per seed** (no gap-fill artifacts). AC, NS, Poisson ran at 100 epochs / 4 iterations; AD at 300 epochs / 8 iterations (all on `m3-cpu-xl`, commit `2d77b13`).
 

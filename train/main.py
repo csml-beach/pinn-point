@@ -501,8 +501,10 @@ def run_pinn_smoke(
         collocation_mode = "problem-defined"
     else:
         spatial_vertices = export_vertex_coordinates(mesh)
-        mesh_x, mesh_y = spatial_vertices.T
-        model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, problem=problem).to(DEVICE)
+        _coords = spatial_vertices.T
+        mesh_x, mesh_y = _coords[0], _coords[1]
+        _mesh_z = _coords[2] if _coords.shape[0] > 2 else None
+        model = FeedForward(mesh_x=mesh_x, mesh_y=mesh_y, mesh_z=_mesh_z, problem=problem).to(DEVICE)
         collocation_mode = "mesh-vertices"
 
     if learning_rate is None:

@@ -87,13 +87,20 @@ class AdaptivePersistentMethod(AdaptiveMethod):
         refine_mask = np.zeros_like(persistent_scores, dtype=bool)
         was_refined = False
         should_refine = ((iteration + 1) % self.refine_period) == 0
+        is_3d = getattr(mesh, 'dim', 2) == 3
         if max_score > 0.0 and should_refine:
             refine_mask = persistent_scores > self.refinement_threshold * max_score
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
             was_refined = bool(np.any(refine_mask))
         else:
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
 
         (
             refined_triangles,

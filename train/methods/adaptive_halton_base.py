@@ -1,4 +1,4 @@
-"""Adaptive residual sampling with a fixed Halton coverage backbone."""
+"""Adaptive residual sampling with an iteration-resampled Halton coverage backbone."""
 
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ else:
 class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
     """Persistent adaptive sampling anchored by a Halton coverage budget.
 
-    The method reserves a fixed fraction of the collocation budget for Halton
-    coverage, then spends the remainder using residual-guided mesh sampling.
+    The method reserves a fraction of each iteration's collocation budget for
+    Halton coverage, then spends the remainder using residual-guided mesh sampling.
     Residual scores are rank-normalized before persistence so the persistence
     mechanism depends on relative difficulty rather than raw PDE scale.
     """
@@ -42,7 +42,7 @@ class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
         self.domain_bounds = domain_bounds
         self.backbone_fraction = float(np.clip(backbone_fraction, 0.0, 1.0))
         self.warmup_iterations = max(0, int(warmup_iterations))
-        self._halton_backbone_cache: dict[int, np.ndarray] = {}
+        self._halton_backbone_cache: dict[tuple[int, int, int], np.ndarray] = {}
         self._active_iteration = 0
 
     def initialize_run_state(self, **kwargs) -> None:
@@ -111,13 +111,20 @@ class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
         refine_mask = np.zeros_like(smoothed_scores, dtype=bool)
         was_refined = False
         should_refine = ((iteration + 1) % self.refine_period) == 0
+        is_3d = getattr(mesh, 'dim', 2) == 3
         if max_refine_score > 0.0 and should_refine:
             refine_mask = smoothed_scores > self.refinement_threshold * max_refine_score
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
             mesh.Refine()
             was_refined = bool(np.any(refine_mask))
         else:
-            mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
+            if is_3d:
+                mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
+            else:
+                mesh.ngmesh.Elements2D().NumPy()["refine"] = refine_mask
 
         (
             refined_triangles,
@@ -173,43 +180,59 @@ class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
 
         return mesh, was_refined
 
+    def _get_mesh_dim(self) -> int:
+        """Return 2 or 3 based on current sampling state element shapes."""
+        if self._sampling_state is not None:
+            triangles = self._sampling_state.get("triangles")
+            if triangles is not None and len(triangles):
+                # tets are (4, 3), triangles are (3, 2)
+                return int(triangles[0].shape[1])
+        return 2
+
     def _generate_halton_backbone(
         self, mesh: Any, num_points: int, iteration: int
     ) -> np.ndarray:
+        dim = self._get_mesh_dim()
         if num_points <= 0:
-            return np.empty((0, 2), dtype=float)
-        if num_points in self._halton_backbone_cache:
-            return self._halton_backbone_cache[num_points].copy()
+            return np.empty((0, dim), dtype=float)
+        cache_key = (int(iteration), num_points, dim)
+        if cache_key in self._halton_backbone_cache:
+            return self._halton_backbone_cache[cache_key].copy()
         if not HAS_QMC or qmc is None:
             raise ImportError("scipy.stats.qmc required for adaptive_halton_base")
 
-        x_min, x_max, y_min, y_max = self.domain_bounds
-        x_range = x_max - x_min
-        y_range = y_max - y_min
+        if dim == 3:
+            elements = self._sampling_state["triangles"]  # (E, 4, 3)
+            mins = np.min(elements.reshape(-1, 3), axis=0)
+            maxs = np.max(elements.reshape(-1, 3), axis=0)
+        else:
+            x_min, x_max, y_min, y_max = self.domain_bounds[:4]
+            mins = np.array([x_min, y_min], dtype=float)
+            maxs = np.array([x_max, y_max], dtype=float)
+        ranges = maxs - mins
         base_seed = 0 if self.seed is None else int(self.seed)
-        offset = 0
+        batch_size = max(1000, num_points * 4)
+        max_batches = 100
+        iter_advance = int(iteration or 0) * batch_size * max_batches
+        sampler = qmc.Halton(d=dim, seed=base_seed)
+        if iter_advance > 0:
+            sampler.fast_forward(iter_advance)
 
         def batch_generator(size: int) -> np.ndarray:
-            nonlocal offset
-            sampler = qmc.Halton(d=2, seed=base_seed + offset)
             unit_points = sampler.random(size)
-            scaled_points = np.empty_like(unit_points)
-            scaled_points[:, 0] = unit_points[:, 0] * x_range + x_min
-            scaled_points[:, 1] = unit_points[:, 1] * y_range + y_min
-            offset += size
-            return scaled_points
+            return unit_points * ranges + mins
 
         points = sample_points_in_domain(
             mesh,
             num_points,
             batch_generator,
-            batch_size=max(1000, num_points * 4),
-            max_batches=100,
+            batch_size=batch_size,
+            max_batches=max_batches,
             warn_label="Halton backbone points",
             method_name=self.name,
             iteration=iteration,
         )
-        self._halton_backbone_cache[num_points] = points.copy()
+        self._halton_backbone_cache[cache_key] = points.copy()
         return points
 
     def get_collocation_points(
@@ -218,7 +241,7 @@ class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
         model: Optional[Any] = None,
         iteration: int = 0,
         num_points: Optional[int] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, ...]:
         if num_points is None:
             num_points = len(list(mesh.vertices))
         num_points = int(num_points)
@@ -247,7 +270,8 @@ class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
             points = np.vstack(point_blocks)
             points = points[self._rng.permutation(len(points))]
         else:
-            points = np.empty((0, 2), dtype=float)
+            dim = self._get_mesh_dim()
+            points = np.empty((0, dim), dtype=float)
         return points_to_tensors(points)
 
     def get_error_indicators(self, mesh: Any, model: Any) -> torch.Tensor:
@@ -266,3 +290,19 @@ class AdaptiveHaltonBaseMethod(AdaptivePersistentMethod):
             }
         )
         return log
+
+
+class AdaptiveHaltonBase95Method(AdaptiveHaltonBaseMethod):
+    """Persistent adaptive sampling anchored by a 95% Halton coverage budget."""
+
+    name = "adaptive_halton_base_95"
+    description = "Halton-backed persistent adaptive residual sampling (backbone_fraction=0.95)"
+
+    def __init__(
+        self,
+        *args: Any,
+        domain_bounds: Tuple[float, float, float, float] = (0.0, 5.0, 0.0, 5.0),
+        backbone_fraction: float = 0.95,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, domain_bounds=domain_bounds, backbone_fraction=backbone_fraction, **kwargs)
