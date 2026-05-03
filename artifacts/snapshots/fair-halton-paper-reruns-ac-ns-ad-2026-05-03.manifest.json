@@ -1,0 +1,50 @@
+{
+  "name": "fair-halton-paper-reruns-ac-ns-ad-2026-05-03",
+  "description": "Paper-facing AC + NS + AD 5-seed reruns after making Halton fair by resampling quasi-random points each iteration instead of reusing a cached point set. Poisson excluded.",
+  "created_date": "2026-05-03",
+  "source_git_head": "f43c0b71f19a2175d9bf1867e1824b2a0625e776",
+  "source_tree_note": "Working tree was dirty at snapshot time; fair-Halton/sampler overlay is saved in source_state/fair_halton_and_sampler_overlay.patch inside the DVC payload.",
+  "excluded": [
+    "poisson_ring",
+    "poisson_ring_narrow_sharp",
+    "poisson_ring_hard"
+  ],
+  "experiments": [
+    {
+      "label": "advection_diffusion",
+      "problem": "advection_diffusion",
+      "local_output_root": "outputs/m3-cpu-xl-advection-halton-rerun-300e-5seed",
+      "snapshot_output_root": "artifacts/snapshots/fair-halton-paper-reruns-ac-ns-ad-2026-05-03/outputs/m3-cpu-xl-advection-halton-rerun-300e-5seed",
+      "seeds": [42, 123, 456, 789, 1011],
+      "methods": ["adaptive_power_tempered", "adaptive_halton_base", "random", "halton", "rad"],
+      "budget": {"epochs": 300, "iterations": 8, "reference_mesh_factor": 0.05},
+      "analysis_files": ["_analysis/selected_summary.csv", "_analysis/selected_per_seed.csv", "_analysis/pairwise_summary.csv"]
+    },
+    {
+      "label": "navier_stokes_channel_obstacle",
+      "problem": "navier_stokes_channel_obstacle",
+      "local_output_root": "outputs/m3-cpu-xl-navier-stokes-halton-rerun-tend1p0-ref0035-dt0001-200e-5seed",
+      "snapshot_output_root": "artifacts/snapshots/fair-halton-paper-reruns-ac-ns-ad-2026-05-03/outputs/m3-cpu-xl-navier-stokes-halton-rerun-tend1p0-ref0035-dt0001-200e-5seed",
+      "seeds": [42, 123, 456, 789, 1011],
+      "methods": ["adaptive_power_tempered", "adaptive_halton_base", "random", "halton", "rad"],
+      "budget": {
+        "epochs": 200,
+        "iterations": 6,
+        "reference_mesh_factor": 0.035,
+        "problem_kwargs": {"t_end": 1.0, "dt": 0.001, "supervised_time_slices": 11, "reference_time_slices": 21}
+      },
+      "analysis_files": ["_analysis/selected_summary.csv", "_analysis/selected_per_seed.csv", "_analysis/pairwise_summary.csv"]
+    },
+    {
+      "label": "allen_cahn_obstacles",
+      "problem": "allen_cahn_obstacles_2d",
+      "local_output_root": "outputs/m3-cpu-xl-allen-cahn-obstacles-halton-rerun-400e-5seed",
+      "snapshot_output_root": "artifacts/snapshots/fair-halton-paper-reruns-ac-ns-ad-2026-05-03/outputs/m3-cpu-xl-allen-cahn-obstacles-halton-rerun-400e-5seed",
+      "seeds": [42, 123, 456, 789, 1011],
+      "methods": ["adaptive_power_tempered", "adaptive_halton_base", "random", "halton", "rad"],
+      "budget": {"epochs": 400, "iterations": 6, "mesh_size": 0.18, "reference_mesh_factor": 0.05},
+      "analysis_files": ["_analysis/selected_summary.csv", "_analysis/selected_per_seed.csv", "_analysis/pairwise_summary.csv"]
+    }
+  ]
+}
+
