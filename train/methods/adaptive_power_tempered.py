@@ -40,7 +40,6 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         coverage_area_exponent: float = 0.5,
         coverage_floor: float = 0.0,
         warmup_iterations: int = 1,
-        min_refine_quantile: float = 0.0,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, persistence_alpha=persistence_alpha, **kwargs)
@@ -49,7 +48,6 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         self.coverage_area_exponent = float(coverage_area_exponent)
         self.coverage_floor = float(np.clip(coverage_floor, 0.0, 1.0))
         self.warmup_iterations = max(0, int(warmup_iterations))
-        self.min_refine_quantile = float(np.clip(min_refine_quantile, 0.0, 1.0))
         self._active_iteration = 0
         self._last_tempering_stats: dict[str, float] = {}
 
@@ -264,12 +262,7 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
         should_refine = ((iteration + 1) % self.refine_period) == 0
         is_3d = getattr(mesh, 'dim', 2) == 3
         if max_refine_score > 0.0 and should_refine:
-            threshold_value = self.refinement_threshold * max_refine_score
-            if self.min_refine_quantile > 0.0 and len(smoothed_scores) > 1:
-                quantile_level = float(np.clip(1.0 - self.min_refine_quantile, 0.0, 1.0))
-                quantile_threshold = float(np.quantile(smoothed_scores, quantile_level))
-                threshold_value = min(threshold_value, quantile_threshold)
-            refine_mask = smoothed_scores > threshold_value
+            refine_mask = smoothed_scores > self.refinement_threshold * max_refine_score
             if is_3d:
                 mesh.ngmesh.Elements3D().NumPy()["refine"] = refine_mask
             else:
@@ -336,7 +329,6 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
             "beta_max": float(self.beta_max),
             "coverage_floor": float(self.coverage_floor),
             "warmup_iterations": int(self.warmup_iterations),
-            "min_refine_quantile": float(self.min_refine_quantile),
             "sampling_indicator": "power_tempered_rank_persistent_residual",
             "refinement_indicator": "current_smoothed_residual",
         }
@@ -359,7 +351,6 @@ class AdaptivePowerTemperedMethod(AdaptivePersistentMethod):
                 "coverage_area_exponent": float(self.coverage_area_exponent),
                 "coverage_floor": float(self.coverage_floor),
                 "warmup_iterations": int(self.warmup_iterations),
-                "min_refine_quantile": float(self.min_refine_quantile),
             }
         )
         log.update(self._last_tempering_stats)
@@ -443,27 +434,3 @@ class AdaptivePowerTemperedFloor95Method(AdaptivePowerTemperedMethod):
         self, *args: Any, coverage_floor: float = 0.95, **kwargs: Any
     ) -> None:
         super().__init__(*args, coverage_floor=coverage_floor, **kwargs)
-
-
-class AdaptivePowerTemperedLocalizedQ10Method(AdaptivePowerTemperedMethod):
-    """Power-tempered sampler with forced top-tail refinement for localized fields."""
-
-    name = "adaptive_power_tempered_localized_q10"
-    description = (
-        "Power-tempered adaptive residual sampling "
-        "(coverage_floor=0.10, min_refine_quantile=0.10)"
-    )
-
-    def __init__(
-        self,
-        *args: Any,
-        coverage_floor: float = 0.10,
-        min_refine_quantile: float = 0.10,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(
-            *args,
-            coverage_floor=coverage_floor,
-            min_refine_quantile=min_refine_quantile,
-            **kwargs,
-        )
