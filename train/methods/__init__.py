@@ -45,6 +45,7 @@ from .adaptive_power_tempered import (
     AdaptivePowerTemperedFloor15Method,
     AdaptivePowerTemperedFloor25Method,
     AdaptivePowerTemperedFloor95Method,
+    AdaptivePowerTemperedLocalizedQ10Method,
     AdaptivePowerTemperedMethod,
 )
 from .hybrid_anchor import AdaptiveHybridAnchorMethod
@@ -67,6 +68,7 @@ METHOD_REGISTRY = {
     "adaptive_power_tempered_floor15": AdaptivePowerTemperedFloor15Method,
     "adaptive_power_tempered_floor25": AdaptivePowerTemperedFloor25Method,
     "adaptive_power_tempered_floor95": AdaptivePowerTemperedFloor95Method,
+    "adaptive_power_tempered_localized_q10": AdaptivePowerTemperedLocalizedQ10Method,
     "adaptive_hybrid_anchor": AdaptiveHybridAnchorMethod,
     "random": RandomMethod,
     "halton": HaltonMethod,
