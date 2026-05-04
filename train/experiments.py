@@ -58,7 +58,6 @@ MESH_REFINEMENT_METHODS = {
     "adaptive_power_tempered_beta25",
     "adaptive_power_tempered_beta30",
     "adaptive_power_tempered_floor05",
-    "adaptive_power_tempered_floor10",
     "adaptive_power_tempered_floor15",
     "adaptive_power_tempered_floor25",
     "adaptive_hybrid_anchor",
@@ -326,7 +325,6 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
         "adaptive_power_tempered_beta25",
         "adaptive_power_tempered_beta30",
         "adaptive_power_tempered_floor05",
-        "adaptive_power_tempered_floor10",
         "adaptive_power_tempered_floor15",
         "adaptive_power_tempered_floor25",
     }:
@@ -335,7 +333,6 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
             "adaptive_power_tempered_beta25": 2.5,
             "adaptive_power_tempered_beta30": 3.0,
             "adaptive_power_tempered_floor05": 4.0,
-            "adaptive_power_tempered_floor10": 4.0,
             "adaptive_power_tempered_floor15": 4.0,
             "adaptive_power_tempered_floor25": 4.0,
         }
@@ -344,7 +341,6 @@ def _build_method_instance(method_name: str, problem, method_seed: int | None = 
             "adaptive_power_tempered_beta25": 0.0,
             "adaptive_power_tempered_beta30": 0.0,
             "adaptive_power_tempered_floor05": 0.05,
-            "adaptive_power_tempered_floor10": 0.10,
             "adaptive_power_tempered_floor15": 0.15,
             "adaptive_power_tempered_floor25": 0.25,
         }
