@@ -377,6 +377,18 @@ class AdaptivePowerTemperedBeta30Method(AdaptivePowerTemperedMethod):
         super().__init__(*args, beta_max=beta_max, **kwargs)
 
 
+class AdaptivePowerTemperedFloor10Method(AdaptivePowerTemperedMethod):
+    """Power-tempered sampler with a 10% true-area coverage floor."""
+
+    name = "adaptive_power_tempered_floor10"
+    description = "Power-tempered adaptive residual sampling (coverage_floor=0.10)"
+
+    def __init__(
+        self, *args: Any, coverage_floor: float = 0.10, **kwargs: Any
+    ) -> None:
+        super().__init__(*args, coverage_floor=coverage_floor, **kwargs)
+
+
 class AdaptivePowerTemperedFloor15Method(AdaptivePowerTemperedMethod):
     """Power-tempered sampler with a 15% true-area coverage floor."""
 
