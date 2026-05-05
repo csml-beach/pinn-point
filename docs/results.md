@@ -468,6 +468,46 @@ Interpretation:
 - The defensible claim is therefore:
   `adaptive_persistent` improves residual substantially relative to `halton` while staying in the same general error band.
 
+### Fair-Halton Rerun (20 Seeds, `adaptive_power_tempered` Suite)
+
+This is the post-fix, seed-matched rerun that uses the same five methods as the Allen-Cahn fair-Halton rerun.
+
+- problem: `navier_stokes_channel_obstacle`
+- horizon: `t_end = 1.0`
+- reference settings: `reference_mesh_factor = 0.035`, `dt = 0.001`
+- methods: `adaptive_power_tempered`, `adaptive_halton_base`, `random`, `halton`, `rad`
+- seeds: `20` total (`5` baseline + `15` add-on)
+- profile: `screen` (`6` iterations, `200` epochs)
+- run commit: `661f8d15bda466af5d137c82ce6a31043449eedd`
+- parity check on the 15-seed add-on: passed (no config mismatches)
+
+Output roots:
+
+- `outputs/m3-cpu-xl-navier-stokes-halton-rerun-tend1p0-ref0035-dt0001-200e-5seed`
+- `outputs/m3-cpu-xl-navier-stokes-halton-rerun-tend1p0-ref0035-dt0001-200e-20seed`
+
+20-seed selected-checkpoint means:
+
+| Method | Relative L2 Error | Relative Fixed L2 Residual | Runtime (s) |
+| --- | ---: | ---: | ---: |
+| `halton` | `0.4628 ± 0.0458` | `0.1687 ± 0.0283` | `75.0 ± 25.6` |
+| `random` | `0.4631 ± 0.0405` | `0.1732 ± 0.0315` | `78.1 ± 21.0` |
+| `rad` | `0.4691 ± 0.0443` | `0.1536 ± 0.0230` | `74.6 ± 25.1` |
+| `adaptive_power_tempered` | `0.4712 ± 0.0441` | `0.1411 ± 0.0177` | `83.6 ± 21.8` |
+| `adaptive_halton_base` | `0.4744 ± 0.0417` | `0.1376 ± 0.0185` | `82.3 ± 20.6` |
+
+Paired test (`adaptive_power_tempered` vs `halton`, `n = 20`, exact sign-flip permutation + bootstrap CI):
+
+- Error (`relative_l2_error`): mean paired diff (`halton - adaptive_power_tempered`) = `-0.00844`, `p = 0.0116`, 95% CI `[-0.01388, -0.00261]`.
+- Residual (`relative_fixed_l2_residual`): mean paired diff = `+0.02761`, `p = 3.81e-06`, 95% CI `[+0.01991, +0.03579]`.
+- Runtime (`cumulative_runtime_sec`): mean paired diff = `-8.58 s`, `p = 1.72e-05`, 95% CI `[-10.93, -6.07]`.
+
+Interpretation:
+
+- On this NS setup, `halton` is significantly better on solution error and significantly faster.
+- `adaptive_power_tempered` is significantly better on PDE residual.
+- This is a clear error/residual/runtime tradeoff, not a strict dominance result.
+
 ## Advection-Diffusion Status
 
 The current hardened advection-diffusion benchmark already has a valid `adaptive_persistent` 10-seed five-way comparison.
