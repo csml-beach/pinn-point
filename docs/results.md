@@ -548,6 +548,44 @@ Interpretation:
 - Poisson is useful negative evidence.
 - It is not the strongest paper-facing benchmark for the current method family.
 
+### Poisson Hard-Narrow (20 Seeds, `ref=0.05`)
+
+We ran a hardened Poisson geometry sweep and promoted `hard_narrow` to a 20-seed confirm run.
+
+- problem: `poisson_ring_hard`
+- flavor: `hard_narrow`
+- methods: `adaptive_power_tempered`, `adaptive_halton_base`, `random`, `halton`, `rad`
+- seeds: `20`
+- profile: `screen` (`8` iterations, `400` epochs)
+- mesh settings: `mesh_size=0.35`, `reference_mesh_factor=0.05`
+- run commit: `5b8eae476f893cc9fadac975fb766947302b9933`
+
+Output root:
+
+- `outputs/m3-cpu-xl-poisson-hard-doe-400e-hard-narrow-20seed/hard_narrow/ref_0p05`
+
+20-seed selected-checkpoint means:
+
+| Method | Relative L2 Error | Relative Fixed L2 Residual | Runtime (s) |
+| --- | ---: | ---: | ---: |
+| `adaptive_power_tempered` | `0.4076 ± 0.1097` | `0.7195 ± 0.1136` | `177.7 ± 28.7` |
+| `halton` | `0.4469 ± 0.1262` | `0.7151 ± 0.1133` | `162.9 ± 53.4` |
+| `random` | `0.5341 ± 0.1889` | `0.8122 ± 0.1447` | `144.7 ± 57.6` |
+| `adaptive_halton_base` | `0.6591 ± 0.1679` | `0.7980 ± 0.1767` | `161.7 ± 40.2` |
+| `rad` | `0.6755 ± 0.2356` | `0.8793 ± 0.1953` | `148.3 ± 64.5` |
+
+Paired test (`adaptive_power_tempered` vs `halton`, `n = 20`, exact sign-flip permutation + bootstrap CI):
+
+- Error (`relative_l2_error`): mean paired diff (`halton - adaptive_power_tempered`) = `+0.03935`, `p = 0.2939`, 95% CI `[-0.02819, +0.10943]`.
+- Residual (`relative_fixed_l2_residual`): mean paired diff = `-0.00445`, `p = 0.9108`, 95% CI `[-0.07773, +0.07344]`.
+- Runtime (`cumulative_runtime_sec`): mean paired diff = `-14.77 s`, `p = 0.2859`, 95% CI `[-42.51, +9.32]`.
+
+Interpretation:
+
+- Against `halton`, `adaptive_power_tempered` improves mean error but is statistically tied on both error and residual at 20 seeds.
+- Runtime also trends slower for `adaptive_power_tempered`, but not significantly at this sample size.
+- Against weaker baselines (`random`, `adaptive_halton_base`, `rad`), `adaptive_power_tempered` remains clearly stronger on mean error.
+
 ## Recommended Next Experiment
 
 If the goal is paper packaging rather than more raw runs, the next move should be:

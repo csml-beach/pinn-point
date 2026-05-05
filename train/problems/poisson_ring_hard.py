@@ -52,6 +52,14 @@ class PoissonRingHardProblem(PDEProblem):
         bottom_hole_radius: float = 0.28,
         bottom_hole_center_x: float = -0.75,
         bottom_hole_center_y: float = -1.00,
+        left_mid_hole_radius: float = 0.0,
+        left_mid_hole_center_x: float = -1.32,
+        left_mid_hole_center_y: float = 0.22,
+        right_mid_hole_radius: float = 0.0,
+        right_mid_hole_center_x: float = 1.18,
+        right_mid_hole_center_y: float = 0.78,
+        source_amplitude_scale: float = 1.0,
+        source_sigma_scale: float = 1.0,
         target_dataset_size: int = 51,
         target_collocation_budget: int = 51,
     ):
@@ -65,11 +73,31 @@ class PoissonRingHardProblem(PDEProblem):
         self.bottom_hole_radius = float(bottom_hole_radius)
         self.bottom_hole_center_x = float(bottom_hole_center_x)
         self.bottom_hole_center_y = float(bottom_hole_center_y)
+        self.left_mid_hole_radius = float(left_mid_hole_radius)
+        self.left_mid_hole_center_x = float(left_mid_hole_center_x)
+        self.left_mid_hole_center_y = float(left_mid_hole_center_y)
+        self.right_mid_hole_radius = float(right_mid_hole_radius)
+        self.right_mid_hole_center_x = float(right_mid_hole_center_x)
+        self.right_mid_hole_center_y = float(right_mid_hole_center_y)
+        self.source_amplitude_scale = float(source_amplitude_scale)
+        self.source_sigma_scale = float(source_sigma_scale)
         self.target_dataset_size = max(int(target_dataset_size), 1)
         self.target_collocation_budget = max(int(target_collocation_budget), 1)
 
+    def _scaled_bumps(self):
+        sigma_scale = max(self.source_sigma_scale, 1e-8)
+        return tuple(
+            (
+                x0,
+                y0,
+                amplitude * self.source_amplitude_scale,
+                sigma * sigma_scale,
+            )
+            for x0, y0, amplitude, sigma in self._BUMPS
+        )
+
     def _circle_specs(self) -> tuple[tuple[str, float, float, float], ...]:
-        return (
+        specs = [
             (
                 "main_hole",
                 self.main_hole_radius,
@@ -88,11 +116,30 @@ class PoissonRingHardProblem(PDEProblem):
                 self.bottom_hole_center_x,
                 self.bottom_hole_center_y,
             ),
-        )
+        ]
+        if self.left_mid_hole_radius > 0.0:
+            specs.append(
+                (
+                    "left_mid_hole",
+                    self.left_mid_hole_radius,
+                    self.left_mid_hole_center_x,
+                    self.left_mid_hole_center_y,
+                )
+            )
+        if self.right_mid_hole_radius > 0.0:
+            specs.append(
+                (
+                    "right_mid_hole",
+                    self.right_mid_hole_radius,
+                    self.right_mid_hole_center_x,
+                    self.right_mid_hole_center_y,
+                )
+            )
+        return tuple(specs)
 
     def _source_term_torch(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         source = torch.zeros_like(x)
-        for x0, y0, amplitude, sigma in self._BUMPS:
+        for x0, y0, amplitude, sigma in self._scaled_bumps():
             radius_sq = (x - x0) ** 2 + (y - y0) ** 2
             source = source + amplitude * torch.exp(
                 -radius_sq / (2.0 * sigma * sigma)
@@ -101,7 +148,7 @@ class PoissonRingHardProblem(PDEProblem):
 
     def _source_term_ngsolve(self):
         source = 0
-        for x0, y0, amplitude, sigma in self._BUMPS:
+        for x0, y0, amplitude, sigma in self._scaled_bumps():
             radius_sq = (x - x0) * (x - x0) + (y - y0) * (y - y0)
             source = source + amplitude * exp(-radius_sq / (2.0 * sigma * sigma))
         return source
@@ -252,4 +299,6 @@ class PoissonRingHardProblem(PDEProblem):
         return (-r, r, -r, r)
 
     def get_dirichlet_boundaries(self) -> list:
-        return ["outer", "main_hole", "top_hole", "bottom_hole"]
+        boundaries = ["outer"]
+        boundaries.extend(boundary_name for boundary_name, *_ in self._circle_specs())
+        return boundaries
