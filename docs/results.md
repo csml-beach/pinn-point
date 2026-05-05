@@ -1,5 +1,42 @@
 # Current Results Summary
 
+## Statistical Test Protocol (Paired Permutation + CI)
+
+Use this protocol for all head-to-head method claims from seed runs.
+
+- Unit of analysis: one paired seed result (`seed` shared across methods).
+- Primary metric: selected-checkpoint error metric from the run analysis table.
+  - Common names in this repo:
+    - `selected_error_rms` (newer `_analysis/per_seed_selected_and_final.csv`)
+    - `relative_error_rms` (older `_analysis/selected_per_seed.csv`)
+- Pairwise difference definition: `d_i = metric(method_B, seed_i) - metric(method_A, seed_i)`.
+  - If lower is better, `d_i > 0` means `method_A` is better on seed `i`.
+
+Test and interval:
+
+1. Paired exact sign-flip permutation test on `{d_i}`.
+2. Report two-sided p-value.
+3. Optionally report one-sided p-value only when direction was pre-specified.
+4. Report mean paired difference `mean(d)` as effect size.
+5. Report bootstrap 95% CI for `mean(d)` (resample paired differences with replacement).
+
+Minimum report block for any claim:
+
+- run directory root
+- metric column name
+- compared methods
+- `n` paired seeds
+- mean(method_A), mean(method_B)
+- mean paired difference (`method_B - method_A`)
+- permutation p-value (two-sided)
+- bootstrap 95% CI for mean paired difference
+
+Interpretation rule:
+
+- Treat p-values as evidence strength, not as the only decision rule.
+- Always read p-value together with effect size and CI.
+- If many pairwise tests are reported in one table, apply a multiple-testing correction (Holm or Benjamini-Hochberg) and state which one was used.
+
 ## ⚠ Halton Caching Bug — Important Context for All Pre-2026-04-30 Results
 
 Discovered 2026-04-30: `train/methods/quasi_random.py` cached the first-iteration
