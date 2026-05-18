@@ -48,9 +48,9 @@ The following benchmarks are confirmed and safe for tabulation:
 - AC: top error methods are close; adaptive methods provide stronger residual control.
 - Poisson (`hard_narrow`, `ref=0.05`, 20 seeds): adaptive_power_tempered has best mean error, but is statistically tied with Halton head-to-head on error and residual.
 - Maxwell 3D (`maxwell_coil_core_3d`, 5 seeds per budget): adaptive_power_tempered shows a consistent error/residual advantage over Halton across tested `(epochs, iterations)` budgets, with a runtime penalty.
-- Maxwell 3D long-run (`e300_i8`, `mesh=0.30`, `ref=0.10`, 10 seeds): adaptive methods improve error/residual strongly versus Halton, with higher runtime.
+- Maxwell 3D long-run (`e300_i8`, `mesh=0.30`, `ref=0.10`, 20 seeds): adaptive methods remain better on mean error/residual than Halton, with a clear runtime penalty; head-to-head p-values for error/residual remain above 0.05.
 
-## Maxwell 3D Long-Run (All 4 Methods, 10 Seeds)
+## Maxwell 3D Long-Run (All 4 Methods, 20 Seeds)
 
 Run root:
 
@@ -64,21 +64,25 @@ Backed CSVs:
 - `outputs/m3-cpu-xl-maxwell3d-all4-longrun10-e300i8-ms030-ref010-2026-05-18/merged_apt_halton_10seed_dedup_latest.csv`
 - `artifacts/metrics/maxwell3d_e300i8_ms030_ref010_10seed/merged_all4_10seed_dedup_latest.csv`
 - `artifacts/metrics/maxwell3d_e300i8_ms030_ref010_10seed/merged_apt_halton_10seed_dedup_latest.csv`
+- `outputs/m3-cpu-xl-maxwell3d-all4-longrun10-e300i8-ms030-ref010-2026-05-18/merged_all4_20seed_dedup_latest.csv`
+- `outputs/m3-cpu-xl-maxwell3d-all4-longrun10-e300i8-ms030-ref010-2026-05-18/merged_apt_halton_20seed_dedup_latest.csv`
+- `artifacts/metrics/maxwell3d_e300i8_ms030_ref010_20seed/merged_all4_20seed_dedup_latest.csv`
+- `artifacts/metrics/maxwell3d_e300i8_ms030_ref010_20seed/merged_apt_halton_20seed_dedup_latest.csv`
 
-Selected-checkpoint means (10 seeds):
+Selected-checkpoint means (20 seeds):
 
 | Method | Total Error | Fixed RMS Residual | Runtime (s) |
 | --- | ---: | ---: | ---: |
-| `adaptive_power_tempered` | `0.2537 ± 0.1224` | `24.45 ± 15.53` | `149.0 ± 9.2` |
-| `random` | `0.2600 ± 0.1318` | `25.22 ± 7.87` | `78.6 ± 16.2` |
-| `halton` | `0.2713 ± 0.1428` | `127.27 ± 283.77` | `85.8 ± 18.5` |
-| `rad` | `0.2826 ± 0.1414` | `48.50 ± 27.61` | `71.1 ± 2.0` |
+| `adaptive_power_tempered` | `0.2442 ± 0.1357` | `26.06 ± 24.44` | `135.3 ± 17.2` |
+| `random` | `0.2511 ± 0.1364` | `20.62 ± 3.93` | `63.7 ± 12.8` |
+| `halton` | `0.2612 ± 0.1466` | `31.35 ± 19.27` | `71.2 ± 24.9` |
+| `rad` | `0.2608 ± 0.1413` | `46.00 ± 105.52` | `55.0 ± 10.6` |
 
-Paired test (`adaptive_power_tempered` vs `halton`, `n = 10`, deduped):
+Paired test (`adaptive_power_tempered` vs `halton`, `n = 20`, deduped):
 
-- Error: mean paired diff (`APT - Halton`) = `-0.01753`, `p = 0.3164`, 95% CI `[-0.04788, +0.01048]`
-- Residual: mean paired diff = `-102.82`, `p = 0.003906`, 95% CI `[-285.21, -8.31]`
-- Runtime: mean paired diff = `+63.18 s`, `p = 0.001953`, 95% CI `[+50.67, +75.04]`
+- Error: mean paired diff (`halton - APT`) = `+0.01707`, `p = 0.1008`, 95% CI `[-0.00140, +0.03650]`
+- Residual: mean paired diff = `+5.289`, `p = 0.5170`, 95% CI `[-10.04, +16.93]`
+- Runtime: mean paired diff = `-64.08 s` (Halton faster), `p = 1.91e-06`, 95% CI `[-77.93, -50.04]`
 
 ## Maxwell 3D Budget Sweep (5 Seeds Per Budget)
 
