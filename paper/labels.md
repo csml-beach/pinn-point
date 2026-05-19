@@ -7,7 +7,18 @@ Track stable paper labels here before they are referenced from LaTeX.
 | Label | Description | Section | Status |
 | --- | --- | --- | --- |
 | `eq:poisson` | Governing Poisson equation and source term | Method | planned |
-| `eq:rad-weighting` | RAD residual-based sampling density | Method | planned |
+| `eq:pde-general` | Abstract PDE and boundary condition statement | Method | drafted |
+| `eq:pinn-objective` | PINN composite loss with data, residual, and boundary terms | Method | drafted |
+| `eq:residual-loss` | Interior mean-squared residual loss | Method | drafted |
+| `eq:element-indicator` | Mesh-scaffold element residual indicator | Method | drafted |
+| `eq:score-smoothing` | Neighbor-smoothed element score | Method | drafted |
+| `eq:rank-persistent-score` | Rank-persistent adaptive score update | Method | drafted |
+| `eq:apt-distribution` | Power-tempered adaptive element distribution | Method | drafted |
+| `eq:residual-entropy` | Normalized residual entropy used for adaptive temperature control | Method | drafted |
+| `eq:apt-temperature` | Entropy-controlled temperature schedule | Method | drafted |
+| `eq:largest-remainder` | Deterministic integer quota allocation | Method | drafted |
+| `eq:rad-weighting` | RAD residual-based sampling density | Method | drafted |
+| `eq:evaluation-metrics` | Reference error and fixed residual metrics | Method | drafted |
 
 ## Figures
 

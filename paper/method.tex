@@ -1,75 +1,252 @@
-\section{Methodology}
+\section{Method}
 \label{sec:method}
 
-We consider the problem of finding an approximate solution $u_\theta(\mathbf{x})$ to a partial differential equation (PDE) defined on a bounded domain $\Omega \subset \mathbb{R}^d$ with a complex, potentially multi-connected boundary $\partial \Omega$. The governing equations are given by:
+We study how the choice of interior collocation points affects the accuracy and
+convergence of physics-informed neural networks (PINNs) trained on geometrically nontrivial
+PDEs.  Let $\Omega \subset \mathbb{R}^d$ denote the physical domain,
+with boundary $\partial\Omega$, and let $u:\Omega\rightarrow\mathbb{R}^m$ be the
+solution field.  We consider the PDE problem
+of the form
 \begin{equation}
-\label{eq:pde_general}
-    \mathcal{F}[u](\mathbf{x}) = f(\mathbf{x}), \quad \mathbf{x} \in \Omega
+    \mathcal{N}[u](x) = f(x),
+    \quad x\in\Omega,
+    \qquad
+    \mathcal{B}[u](x) = g(x),
+    \quad x\in\partial\Omega,
+    \label{eq:pde-general}
 \end{equation}
-Here, $\mathcal{F}[\cdot]$ denotes a (possibly nonlinear) differential operator, $f : \Omega \to \mathbb{R}^m$ is a given forcing term, and $\mathcal{B}[\cdot]$ encodes the boundary conditions.
-subject to the boundary condition $\mathcal{B}[u](\mathbf{x}) = g(\mathbf{x})$ on $\partial \Omega$. Physics-informed neural networks (PINNs) approximate $u(\mathbf{x})$ using a neural network $u_\theta$ with trainable parameters $\theta$. The network is optimized by minimizing a composite objective function:
-\begin{equation}
-    \mathcal{L}(\theta) = \lambda_r \mathcal{L}_r(\theta; \mathcal{X}_r) + \lambda_b \mathcal{L}_b(\theta; \mathcal{X}_b) + \lambda_d \mathcal{L}_d(\theta; \mathcal{X}_d)
-\end{equation}
-Here $\mathcal{L}_r$, $\mathcal{L}_b$, and $\mathcal{L}_d$ are the interior residual, boundary condition, and supervised data losses, respectively; $\lambda_r, \lambda_b, \lambda_d \geq 0$ are scalar weights balancing their contributions; and $\mathcal{X}_r \subset \Omega$, $\mathcal{X}_b \subset \partial\Omega$, $\mathcal{X}_d$ are the corresponding point sets. 
+where $\mathcal{N}$ is the differential PDE operator, $\mathcal{B}$ is the boundary
+operator, and $f$ and $g$ are the forcing and boundary terms.
+For time-dependent problems, time is treated as an additional input coordinate
+and the space-time domain is sampled by the same collocation interface.
 
-The residual loss is defined as the mean squared PDE residual over the interior collocation set:
-\begin{equation}
-    \mathcal{L}_r(\theta; \mathcal{X}_r) = \frac{1}{|\mathcal{X}_r|} \sum_{\mathbf{x} \in \mathcal{X}_r} \|\mathcal{R}[u_\theta](\mathbf{x})\|^2, \quad \mathcal{R}[u_\theta] \equiv \mathcal{F}[u_\theta] - f
-\end{equation}
-The accuracy of the PINN approximation is critically sensitive to the distribution of $\mathcal{X}_r$, particularly in regions where the solution $u$ exhibits sharp gradients or the domain $\Omega$ possesses complex geometric features.
+\subsection{PINN Objective}
+\label{subsec:pinn-objective}
 
-\subsection{The Mesh-Guided Computational Scaffold}
-We propose a hybrid framework that couples simplicial mesh evolution ($h$-refinement) with adaptive importance sampling. The domain $\Omega$ is discretized by a sequence of conforming triangular meshes $\{\mathcal{M}^{(k)}\}_{k=0}^K$, where each mesh $\mathcal{M} = \{E_i\}_{i=1}^{N_e}$ consists of $N_e$ elements such that $\overline{\Omega} = \cup_{i=1}^{N_e} E_i$ and the intersection of any two elements is either empty, a common vertex, or a common edge.
+Following the standard PINN formulation \cite{raissi2019physics}, we train a
+differentiable parametric model $u_\theta$ with parameters $\theta$ to
+approximate the unknown solution field.  The defining feature of a PINN is the
+use of automatic differentiation to compute the derivatives required by the
+PDE and boundary conditions.  The model is trained by minimizing a composite
+loss combining supervised data observations, the interior PDE residual, and
+boundary terms:
+\begin{equation}
+    \mathcal{L}(\theta)
+    =
+    w_d \mathcal{L}_d(\theta;\mathcal{D})
+    + w_r \mathcal{L}_r(\theta;\mathcal{X}_r)
+    + w_b \mathcal{L}_b(\theta;\mathcal{X}_b).
+    \label{eq:pinn-objective}
+\end{equation}
+Here $\mathcal{D}$ is a supervised dataset of solution observations, which may
+be exact or noisy, $\mathcal{X}_r\subset\Omega$ is the interior collocation set, and
+$\mathcal{X}_b\subset\partial\Omega$ is the set used for boundary enforcement.
+The interior residual loss evaluates
+the PDE constraint violation across the collocation set:
+\begin{equation}
+    \mathcal{L}_r(\theta;\mathcal{X}_r)
+    =
+    \frac{1}{|\mathcal{X}_r|}
+    \sum_{x\in\mathcal{X}_r}
+    \left\|
+        \mathcal{R}_\theta(x)
+    \right\|_2^2,
+    \qquad
+    \mathcal{R}_\theta
+    =
+    \mathcal{N}[u_\theta](x)-f(x).
+    \label{eq:residual-loss}
+\end{equation}
+The central methodological question is how to choose $\mathcal{X}_r$.
 
-\subsubsection{H-Refinement and Local Error Indicators}
-For each element $E_i \in \mathcal{M}^{(k)}$, we define a local error indicator $\eta_i^{(k)}$ based on the $L^2$-norm of the current PDE residual:
-\begin{equation}
-    \eta_i^{(k)} = \left( \int_{E_i} \|\mathcal{R}[u_\theta](\mathbf{x})\|^2 d\mathbf{x} \right)^{1/2}
-\end{equation}
-In our implementation, this integral is approximated using a high-order vertex-averaging scheme on the mesh. Elements are marked for refinement if they exceed a relative threshold: $\eta_i > \tau \cdot \max_{j} \eta_j$, where $\tau \in (0, 1]$ is the refinement aggressiveness. The mesh is updated via a refinement operator $\mathcal{T}: \mathcal{M}^{(k)} \to \mathcal{M}^{(k+1)}$ (e.g., longest-edge bisection), ensuring that the scaffold density $\rho(\mathbf{x})$ tracks the localized residual field.
+\subsection{Mesh-Backed Residual Scoring}
+\label{subsec:mesh-backed-adaptive}
 
-\subsubsection{Rank-Persistent Field Projection}
-To stabilize the sampling process against transient optimizer oscillations, we compute a rank-persistent score $\hat{z}_i^{(k)}$. We first map the indicator $\eta_i^{(k)}$ to its normalized ordinal rank:
-\begin{equation}
-    z_i^{(k)} = \frac{\sigma(\eta_i^{(k)}) - 1}{N_e - 1}, \quad \sigma(\eta) \equiv \text{rank of } \eta \text{ in } \{\eta_j\}_{j=1}^{N_e}
-\end{equation}
-The persistent score $\hat{z}^{(k)}$ is then defined as an exponentially weighted moving average:
-\begin{equation}
-    \hat{z}_i^{(k)} = \alpha \hat{z}_{\pi(i)}^{(k-1)} + (1-\alpha) z_i^{(k)}
-\end{equation}
-where $\alpha \in [0, 1]$ is the persistence factor and $\pi: \mathcal{M}^{(k)} \to \mathcal{M}^{(k-1)}$ is a spatial projection operator that maps each element in the refined mesh to its parent or nearest neighbor in the previous discretization.
+Our first method introduces a mesh-backed scaffold for residual-guided
+adaptation.  At iteration $k$, the method takes the current PINN $u_{\theta_k}$
+and an auxiliary simplicial mesh
+$\mathcal{T}^{(k)}=\{E_i^{(k)}\}_{i=1}^{M_k}$, where each element is a triangle
+in two spatial dimensions and a tetrahedron in three spatial dimensions, and
+converts residual evaluations on that mesh into a spatial importance map.  The
+mesh is used only to organize residual information: it provides elementwise
+regions, measures, and neighborhoods that let the method reason about coherent
+parts of the domain, while leaving the PINN objective in
+\cref{eq:pinn-objective} unchanged.
 
-\subsection{Adaptive Importance Sampling Densities}
-The mesh scaffold $\mathcal{M}^{(k)}$ induces a piecewise constant probability density function (PDF) $f_{\mathcal{X}}^{(k)}(\mathbf{x})$ over the domain $\Omega$:
+To obtain a stable regional indicator, we evaluate the current residual on a
+small set of barycentric quadrature points $Q_i^{(k)}$ inside each element and
+define the element score
 \begin{equation}
-    f_{\mathcal{X}}^{(k)}(\mathbf{x}) = \sum_{i=1}^{N_e} \frac{P(E_i)}{\text{Area}(E_i)} \mathbb{I}_{E_i}(\mathbf{x})
+    s_i^{(k)}
+    =
+    |E_i^{(k)}|^{a}
+    \frac{1}{|Q_i^{(k)}|}
+    \sum_{q\in Q_i^{(k)}}
+    \left\|
+        \mathcal{R}_{\theta_k}(q)
+    \right\|_2^2,
+    \label{eq:element-indicator}
 \end{equation}
-where $\mathbb{I}_{E_i}$ is the indicator function for element $E_i$, and $P(E_i)$ is the discrete probability mass assigned to that element. We propose two strategies for defining $P(E_i)$, both governed by an information-theoretic control loop.
+where $|E_i^{(k)}|$ is area or volume and $a$ controls how strongly the element
+measure enters the score.  This aggregation step summarizes local residual
+behavior over a region rather than reacting to isolated point evaluations, and
+therefore provides a more stable indication of where the current PINN remains
+under-resolved.
 
-Let $\mathcal{H}_{\text{norm}} = -(1/\ln N_e) \sum p_i \ln p_i$ be the normalized entropy of the residual distribution $p_i = \eta_i / \sum \eta_j$. We define the residual concentration $C = 1 - \mathcal{H}_{\text{norm}}$ as the driver for adaptivity.
+Because the elementwise scores can still exhibit transient local spikes, we
+smooth them over the element adjacency graph:
+\begin{equation}
+    \tilde{s}_i^{(k)}
+    =
+    (1-\lambda_s)s_i^{(k)}
+    +
+    \lambda_s
+    \frac{\sum_{j\in\mathcal{N}(i)} |E_j^{(k)}|s_j^{(k)}}
+         {\sum_{j\in\mathcal{N}(i)} |E_j^{(k)}|},
+    \label{eq:score-smoothing}
+\end{equation}
+where $\mathcal{N}(i)$ is the set of neighboring elements and
+$\lambda_s\in[0,1]$ is the smoothing parameter.  Elements whose smoothed score
+exceeds a fixed fraction of the maximum score are marked for refinement.  The
+output of this stage is thus a refined, mesh-backed importance map that
+identifies coherent high-residual regions and is passed to the subsequent point
+allocation stage.
 
-\subsubsection{Power-Tempered Sampling}
-The Power-Tempered strategy employs exponential tilting of the geometric baseline to focus the collocation set:
-\begin{equation}
-    P(E_i) = \frac{\text{Area}_i^{\gamma} \exp\left( \beta \hat{z}_i \right)}{\sum_{j=1}^{N_e} \text{Area}_j^{\gamma} \exp\left( \beta \hat{z}_j \right)}
-\end{equation}
-where $\gamma$ is a geometric scaling exponent. The inverse temperature $\beta$ is autonomously adjusted:
-\begin{equation}
-    \beta(C) = \beta_{\min} + (\beta_{\max} - \beta_{\min}) \cdot C
-\end{equation}
-This formulation ensures that the sampling density $f_{\mathcal{X}}$ smoothly transitions from a nearly uniform geometric distribution (high entropy, $C \to 0$) to a sharply peaked distribution targeting high-residual corridors (low entropy, $C \to 1$).
+\subsection{Power-Tempered Point Allocation}
+\label{subsec:power-tempered}
 
-\subsubsection{Entropy-Balanced Sampling}
-The Entropy-Balanced strategy uses a dynamic convex combination of geometric and adaptive measures:
+Our primary adaptive method, denoted \texttt{adaptive\_power\_tempered}, turns
+the scaffold scores into a fixed-size collocation set through a rank-persistent
+probability distribution.  First, the smoothed element scores are converted into
+normalized ranks $z_i^{(k)}\in[0,1]$.  To reduce sensitivity to transient
+optimizer noise, ranks are blended with their nearest previous element scores:
 \begin{equation}
-    P(E_i) = (1 - \lambda) \frac{\text{Area}_i}{\text{Area}(\Omega)} + \lambda \frac{\hat{z}_i^\kappa}{\sum \hat{z}_j^\kappa}
+    \hat{z}_i^{(k)}
+    =
+    \alpha \hat{z}_{\pi(i)}^{(k-1)}
+    +
+    (1-\alpha) z_i^{(k)},
+    \label{eq:rank-persistent-score}
 \end{equation}
-where $\kappa$ is a rank-sensitivity parameter. The mixing coefficient $\lambda(C) = \lambda_{\min} + (\lambda_{\max} - \lambda_{\min}) C$ ensures a robust coverage floor, preventing the "collapse" of the collocation set into a few mesh elements and maintaining physical constraints in low-residual regions.
+where $\alpha\in[0,1]$ is the persistence coefficient and $\pi(i)$ maps a current
+element to the nearest element centroid from the previous scaffold.  During the
+warmup period, the method uses the current ranks directly.
 
-\subsection{Deterministic Allocation via the Largest Remainder Method}
-Given a global budget of $N_r$ collocation points, we must distribute them into integer quotas $n_i$ per element. This is framed as a constrained optimization problem:
+The persistent ranks define an exponentially tilted element distribution:
 \begin{equation}
-    \text{minimize} \sum_{i=1}^{N_e} |n_i - N_r P(E_i)| \quad \text{s.t.} \sum_{i=1}^{N_e} n_i = N_r, \ n_i \in \mathbb{Z}_{\geq 0}
+    p_i^{(k)}
+    =
+    \frac{
+        |E_i^{(k)}|^\gamma
+        \exp\!\left(\beta_k \hat{z}_i^{(k)}\right)
+    }{
+        \sum_{j=1}^{M_k}
+        |E_j^{(k)}|^\gamma
+        \exp\!\left(\beta_k \hat{z}_j^{(k)}\right)
+    },
+    \label{eq:apt-distribution}
 \end{equation}
-This is solved exactly using the Largest Remainder Method, where initial quotas are set to $\lfloor N_r P(E_i) \rfloor$ and the residual points are allocated to elements with the largest fractional parts. Points within each triangle are then sampled via an affine transformation from the reference unit simplex $\hat{E} \subset \mathbb{R}^2$ to $E_i$.
+where $\gamma$ controls geometric coverage.  The temperature is tied to the
+concentration of the raw residual field.  Define
+\begin{equation}
+    H_k
+    =
+    -\frac{1}{\log M_k}
+    \sum_{i=1}^{M_k}
+    \rho_i^{(k)}\log\rho_i^{(k)},
+    \qquad
+    \rho_i^{(k)}
+    =
+    \frac{\tilde{s}_i^{(k)}}{\sum_j\tilde{s}_j^{(k)}}.
+    \label{eq:residual-entropy}
+\end{equation}
+We then set
+\begin{equation}
+    \beta_k
+    =
+    \beta_{\min}
+    +
+    \left(\beta_{\max}-\beta_{\min}\right)(1-H_k).
+    \label{eq:apt-temperature}
+\end{equation}
+When residuals are diffuse, the entropy is high and the sampler remains close to
+a geometric coverage distribution.  When residuals are concentrated, the
+temperature increases and more points are allocated to persistent high-residual
+regions.  Some variants mix \cref{eq:apt-distribution} with the true area/volume
+distribution as a coverage floor, but the final paper-facing experiments use
+the default power-tempered method unless otherwise stated.
+
+Given probabilities $p_i^{(k)}$ and budget $N_r$, integer element quotas are
+assigned deterministically by largest remainder:
+\begin{equation}
+    n_i^{(k)}
+    =
+    \left\lfloor N_r p_i^{(k)} \right\rfloor
+    +
+    \delta_i,
+    \qquad
+    \sum_i n_i^{(k)} = N_r,
+    \label{eq:largest-remainder}
+\end{equation}
+where the $\delta_i$ allocate the remaining points to the elements with the
+largest fractional remainders.  Points are then sampled uniformly inside each
+selected triangle or tetrahedron using barycentric coordinates.
+
+\subsection{Comparison Samplers}
+\label{subsec:comparison-samplers}
+
+We compare the adaptive method against three families of baselines.  Uniform
+random sampling draws interior points by rejection sampling from the domain
+bounding box.  Halton sampling uses a low-discrepancy sequence with the same
+rejection interface and advances to a fresh, non-overlapping sequence window at
+each iteration.  RAD follows residual-based adaptive distribution sampling:
+\begin{equation}
+    \Pr(x_j)
+    =
+    \frac{
+        |\mathcal{R}_{\theta}(x_j)|^\kappa/
+        \overline{|\mathcal{R}_{\theta}|^\kappa}
+        + c
+    }{
+        \sum_{\ell}
+        \left(
+        |\mathcal{R}_{\theta}(x_\ell)|^\kappa/
+        \overline{|\mathcal{R}_{\theta}|^\kappa}
+        + c
+        \right)
+    },
+    \label{eq:rad-weighting}
+\end{equation}
+where $\{x_j\}$ is a candidate set, $\kappa$ is the residual exponent,
+and $c$ is a coverage regularizer.  In contrast to the mesh-scaffold method,
+RAD samples from pointwise residual weights on a candidate cloud rather than
+from element-level residual scores.
+
+\subsection{Evaluation Metrics}
+\label{subsec:evaluation-metrics}
+
+For each method and seed, the reported checkpoint is selected by the validation
+score recorded during training.  We evaluate solution error against the FEM
+reference solution on a fixed reference mesh:
+\begin{equation}
+    e_{\mathrm{rel}}
+    =
+    \frac{
+        \left\|u_\theta-u_{\mathrm{ref}}\right\|_{L^2(\Omega)}
+    }{
+        \left\|u_{\mathrm{ref}}\right\|_{L^2(\Omega)}
+    },
+    \qquad
+    r_{\mathrm{fixed}}
+    =
+    \left(
+        \frac{1}{|\Omega|}
+        \int_{\Omega}
+        \left\|\mathcal{R}_{\theta}(x)\right\|_2^2
+        \dd x
+    \right)^{1/2}.
+    \label{eq:evaluation-metrics}
+\end{equation}
+The fixed residual metric is computed on the same reference discretization for
+all methods in a run.  Runtime is recorded per iteration and accumulated through
+the selected checkpoint so that sampler overhead is part of the comparison.
