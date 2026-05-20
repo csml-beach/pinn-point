@@ -62,39 +62,70 @@ The central methodological question is how to choose $\mathcal{X}_r$.
 \subsection{Mesh-Backed Residual Scoring}
 \label{subsec:mesh-backed-adaptive}
 
-Our first method introduces a mesh-backed scaffold for residual-guided
-adaptation.  At iteration $k$, the method takes the current PINN $u_{\theta_k}$
-and an auxiliary simplicial mesh
-$\mathcal{T}^{(k)}=\{E_i^{(k)}\}_{i=1}^{M_k}$, where each element is a triangle
-in two spatial dimensions and a tetrahedron in three spatial dimensions, and
-converts residual evaluations on that mesh into a spatial importance map.  The
-mesh is used only to organize residual information: it provides elementwise
-regions, measures, and neighborhoods that let the method reason about coherent
-parts of the domain, while leaving the PINN objective in
-\cref{eq:pinn-objective} unchanged.
+The adaptive sampler requires a scalar field that identifies where the current
+PINN iterate violates the governing equation, but it must construct this field
+without changing the PINN approximation space or increasing the collocation
+budget.  This subsection defines that residual-scoring scaffold.  It is not yet
+a complete sampling rule; the proposed power-tempered allocation is specified in
+\cref{subsec:power-tempered}, while Halton-backed adaptive variants reuse the
+same scaffold with a different allocation rule.  We therefore use the
+finite-element mesh as a geometric scaffold for localizing residual information.
+For a PINN iterate $u_{\theta_k}$, the strong-form residual is
+\begin{equation}
+    \mathcal{R}^{\mathrm{s}}_{\theta_k}(x)
+    =
+    \mathcal{N}[u_{\theta_k}](x)-f(x),
+    \qquad x\in\Omega .
+    \label{eq:strong-residual}
+\end{equation}
+To localize this residual, let
+$\mathcal{T}_h^{(k)}=\{E_i^{(k)}\}_{i=1}^{M_k}$ be a conforming simplicial mesh
+of $\Omega$ at sampling iteration $k$.  The mesh partitions the domain into
+elements on which residual energy can be estimated and compared.
 
-To obtain a stable regional indicator, we evaluate the current residual on a
-small set of barycentric quadrature points $Q_i^{(k)}$ inside each element and
-define the element score
+The computable quantity used by the sampler is a local quadrature approximation
+to the strong residual energy.  Let
+$Q_i^{(k)}=\{q_{iq}\}_{q=1}^{n_q}$ be barycentric quadrature points on
+$E_i^{(k)}$ with nonnegative weights $\{\omega_q\}_{q=1}^{n_q}$ satisfying
+$\sum_q\omega_q=1$.  We assign element $E_i^{(k)}$ the score
 \begin{equation}
     s_i^{(k)}
     =
-    |E_i^{(k)}|^{a}
-    \frac{1}{|Q_i^{(k)}|}
-    \sum_{q\in Q_i^{(k)}}
+    |E_i^{(k)}|^{\chi}
+    \sum_{q=1}^{n_q}
+    \omega_q
     \left\|
-        \mathcal{R}_{\theta_k}(q)
+        \mathcal{R}^{\mathrm{s}}_{\theta_k}(q_{iq})
     \right\|_2^2,
     \label{eq:element-indicator}
 \end{equation}
-where $|E_i^{(k)}|$ is area or volume and $a$ controls how strongly the element
-measure enters the score.  This aggregation step summarizes local residual
-behavior over a region rather than reacting to isolated point evaluations, and
-therefore provides a more stable indication of where the current PINN remains
-under-resolved.
+where $|E_i^{(k)}|$ is the element area or volume and $\chi$ controls how much
+geometric measure enters the sampling score.  When $\chi=1$, this expression is
+a quadrature approximation to the element contribution
+$\int_{E_i^{(k)}}\|\mathcal{R}^{\mathrm{s}}_{\theta_k}(x)\|_2^2\,\dd x$; other
+values of $\chi$ shift the score toward either residual magnitude or geometric
+coverage.  Thus $s_i^{(k)}$ should be interpreted as a mesh-local residual
+energy indicator, not as a Galerkin projection of the residual.  Its purpose is
+to rank elements and define the spatial importance measure used for the next
+collocation set.
 
-Because the elementwise scores can still exhibit transient local spikes, we
-smooth them over the element adjacency graph:
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/bary.pdf}
+    \caption{Element-local residual scoring.  On each mesh element
+    $E_i^{(k)}$, the strong residual is evaluated at barycentric quadrature
+    points and combined into a scalar residual-energy score $s_i^{(k)}$.  These
+    scores are subsequently used for element ranking and point allocation.}
+    \label{fig:element-residual-quadrature}
+\end{figure}
+
+The element scores in \cref{eq:element-indicator} define a discrete residual
+measure on the mesh.  Because this measure is obtained from the current network
+iterate, it may contain localized fluctuations caused by optimizer noise, finite
+quadrature, or transient errors early in training.  We therefore apply a local
+smoothing step on the element adjacency graph before converting the scores into
+sampling probabilities.  Specifically, each score is blended with the
+measure-weighted average of its neighboring element scores:
 \begin{equation}
     \tilde{s}_i^{(k)}
     =
@@ -108,18 +139,20 @@ smooth them over the element adjacency graph:
 where $\mathcal{N}(i)$ is the set of neighboring elements and
 $\lambda_s\in[0,1]$ is the smoothing parameter.  Elements whose smoothed score
 exceeds a fixed fraction of the maximum score are marked for refinement.  The
-output of this stage is thus a refined, mesh-backed importance map that
-identifies coherent high-residual regions and is passed to the subsequent point
-allocation stage.
+result is a spatially regularized residual measure that identifies coherent
+high-residual regions and is passed to the subsequent point allocation stage.
 
 \subsection{Power-Tempered Point Allocation}
 \label{subsec:power-tempered}
 
-Our primary adaptive method, denoted \texttt{adaptive\_power\_tempered}, turns
-the scaffold scores into a fixed-size collocation set through a rank-persistent
-probability distribution.  First, the smoothed element scores are converted into
-normalized ranks $z_i^{(k)}\in[0,1]$.  To reduce sensitivity to transient
-optimizer noise, ranks are blended with their nearest previous element scores:
+Our primary adaptive method, denoted \texttt{adaptive\_power\_tempered}, uses
+the regularized scores from sampling iteration $k$ to propose the next interior
+collocation set.  The construction has two steps: the element scores are first
+converted into a probability distribution over mesh elements, and that
+distribution is then used to allocate a fixed budget of residual points.  To
+make the distribution insensitive to arbitrary score scales, the smoothed
+scores are converted into normalized ranks $z_i^{(k)}\in[0,1]$.  These ranks are
+then blended with their nearest previous element scores:
 \begin{equation}
     \hat{z}_i^{(k)}
     =
@@ -176,8 +209,8 @@ regions.  Some variants mix \cref{eq:apt-distribution} with the true area/volume
 distribution as a coverage floor, but the final paper-facing experiments use
 the default power-tempered method unless otherwise stated.
 
-Given probabilities $p_i^{(k)}$ and budget $N_r$, integer element quotas are
-assigned deterministically by largest remainder:
+Given probabilities $p_i^{(k)}$ and residual-point budget $N_r$, integer
+element quotas are assigned deterministically by largest remainder:
 \begin{equation}
     n_i^{(k)}
     =
@@ -189,17 +222,33 @@ assigned deterministically by largest remainder:
     \label{eq:largest-remainder}
 \end{equation}
 where the $\delta_i$ allocate the remaining points to the elements with the
-largest fractional remainders.  Points are then sampled uniformly inside each
-selected triangle or tetrahedron using barycentric coordinates.
+largest fractional remainders.  The next residual collocation set is then
+\begin{equation}
+    \mathcal{X}_r^{(k+1)}
+    =
+    \bigcup_{i=1}^{M_k}
+    \left\{
+        x_{i\ell}^{(k+1)}
+    \right\}_{\ell=1}^{n_i^{(k)}},
+    \qquad
+    x_{i\ell}^{(k+1)} \sim \operatorname{Unif}\!\left(E_i^{(k)}\right).
+    \label{eq:collocation-update}
+\end{equation}
+In practice, the uniform samples inside each selected triangle or tetrahedron
+are generated with barycentric coordinates.  Thus the network state
+$u_{\theta_k}$ determines a residual measure on the current mesh, and that
+measure determines the residual points used in the next training stage.
 
 \subsection{Comparison Samplers}
 \label{subsec:comparison-samplers}
 
-We compare the adaptive method against three families of baselines.  Uniform
-random sampling draws interior points by rejection sampling from the domain
-bounding box.  Halton sampling uses a low-discrepancy sequence with the same
-rejection interface and advances to a fresh, non-overlapping sequence window at
-each iteration.  RAD follows residual-based adaptive distribution sampling:
+We compare the power-tempered adaptive method against fixed, pointwise
+adaptive, and scaffold-based alternatives.  Uniform random sampling draws
+interior points by rejection sampling from the domain bounding box.  Halton
+sampling uses a low-discrepancy sequence with the same rejection interface and
+advances to a fresh, non-overlapping sequence window at each iteration.  Plain
+Halton is therefore a non-adaptive baseline and does not use the mesh-backed
+residual scores.  RAD follows residual-based adaptive distribution sampling:
 \begin{equation}
     \Pr(x_j)
     =
@@ -221,6 +270,14 @@ where $\{x_j\}$ is a candidate set, $\kappa$ is the residual exponent,
 and $c$ is a coverage regularizer.  In contrast to the mesh-scaffold method,
 RAD samples from pointwise residual weights on a candidate cloud rather than
 from element-level residual scores.
+
+We also evaluate a Halton-backed adaptive variant as a scaffold-based
+comparison.  This method uses the same mesh-local residual scores and
+cross-iteration rank persistence as the proposed method, but reserves a fixed
+fraction of the residual-point budget for a Halton coverage backbone and
+allocates only the remaining points adaptively.  It therefore tests whether the
+power-tempered element allocation in \cref{subsec:power-tempered} improves on a
+simpler combination of residual scoring and low-discrepancy coverage.
 
 \subsection{Evaluation Metrics}
 \label{subsec:evaluation-metrics}

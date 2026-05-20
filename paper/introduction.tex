@@ -1,20 +1,63 @@
 \section{Introduction}
 \label{sec:introduction}
 
-Physics-informed neural networks (PINNs) have emerged as a powerful paradigm for solving partial differential equations (PDEs) by embedding physical constraints directly into the neural network's loss function. However, the accuracy and convergence of PINNs are heavily dependent on the distribution of collocation points where the PDE residuals are evaluated. This dependency is particularly pronounced in problems involving complex geometries, sharp gradients, or multi-scale phenomena, where uniform or random sampling often fails to capture localized features, leading to slow training or poor generalization.
+Physics-informed neural networks (PINNs) approximate solutions of partial
+differential equations (PDEs) by minimizing losses that combine data mismatch,
+boundary-condition error, and the differential-equation residual evaluated at
+collocation points \cite{raissi2019physics,karniadakis2021physics}.  Because the
+residual term is an empirical approximation to a domain integral, the placement
+of collocation points directly changes the optimization problem seen by the
+network.  This dependence becomes especially important on domains with
+perforations, obstacles, narrow regions, or localized solution features, where a
+fixed uniform point set may allocate too little resolution to the parts of the
+domain that dominate the error or residual.
 
-A growing body of literature has explored adaptive sampling strategies to address these challenges. These methods typically aim to concentrate collocation points in regions with high PDE residuals, effectively "focusing" the network's attention on the most difficult parts of the domain. While residual-based methods like the Residual-based Adaptive Distribution (RAD) \cite{wu2023comprehensive} show promise, they often suffer from numerical instabilities—such as NaN gradients or probability collapse—and can lack the necessary spatial diversity to prevent the model from over-fitting to narrow regions of the domain.
+Adaptive collocation strategies address this issue by changing the residual
+point distribution during training.  A systematic comparison of PINN sampling
+strategies, including random, low-discrepancy, and residual-adaptive methods, is
+given by \cite{wu2023comprehensive}.  Residual-based adaptive distribution (RAD)
+methods increase the sampling probability of candidate points with large PDE
+residuals, while low-discrepancy sequences such as Halton and Sobol provide
+strong non-adaptive coverage baselines
+\cite{halton1960efficiency,sobol1967distribution}.  These approaches represent
+different tradeoffs.  Pointwise residual weighting can respond quickly to
+localized defects, but it may also produce highly concentrated sampling
+distributions when the residual field contains sharp outliers.  Low-discrepancy
+sampling provides stable global coverage, but it does not use information from
+the current model.  For complex geometries, a useful adaptive sampler should
+therefore combine residual sensitivity with an explicit mechanism for preserving
+spatial coverage.
 
-In this work, we propose a new family of adaptive sampling strategies specifically designed for robustness and efficiency in complex 2D geometries. Our approach, rooted in power-tempered residual guidance and entropy-balanced sampling, utilizes a mesh-based scaffold to integrate residual information across the domain. By tempering the residual distribution and maintaining an explicit focus on spatial diversity, our methods provide a stable and high-fidelity alternative to existing adaptive strategies.
+This paper introduces a fixed-budget, mesh-scaffolded adaptive collocation
+method for PINNs on complex geometries.  The method evaluates the current PINN
+residual on a simplicial mesh, smooths and rank-normalizes elementwise residual
+scores, and samples a fixed number of interior collocation points from a
+power-tempered element distribution.  The mesh is used as a scaffold for
+geometry-aware residual aggregation and optional refinement; it is not used to
+increase the training budget.  This separation is important experimentally:
+adaptive sampling is compared against random, RAD, and low-discrepancy baselines
+under matched collocation budgets and matched resampling schedules.
 
-We evaluate our proposed methods using the \pinnpoint framework, a comprehensive benchmarking suite that ensures a "fair comparison" between sampling strategies. By sharing fixed FEM-derived supervised data, reference solutions, and matched iteration budgets, we isolate the impact of the collocation policy itself. Our results across a suite of challenging PDEs—including Navier-Stokes, Advection-Diffusion, and Allen-Cahn equations—demonstrate that our adaptive strategies significantly improve convergence rates and final error accuracy compared to established baselines.
+We evaluate the method in \pinnpoint, a controlled benchmark framework that
+couples finite-element reference solutions with matched-budget PINN training.
+All methods in a comparison share the same supervised FEM data, reference
+solution, network architecture, training budget, and seed set; only the
+collocation policy changes.  The experiments cover Poisson, advection-diffusion,
+Navier-Stokes, and Allen-Cahn benchmarks.  Rather than treating adaptive
+sampling as uniformly superior, we report the empirical tradeoffs among solution
+error, fixed-reference residual, and runtime, including seed-paired statistical
+tests for the main comparisons.
 
 The main contributions of this work are:
 \begin{itemize}
-    \item A novel adaptive sampling methodology based on power-tempered and entropy-balanced residual distributions.
-    \item A robust mesh-guided implementation that ensures stability and spatial diversity even in complex, perforated domains.
-    \item A comprehensive benchmarking study across multiple PDEs (Poisson, Navier-Stokes, Advection-Diffusion, and Allen-Cahn) highlighting the trade-offs between various sampling policies.
-    \item Evidence-based results showing significant improvements in error-to-cost efficiency on `m3-large-cpu` and GPU targets.
+    \item A fixed-budget adaptive collocation algorithm that uses a simplicial mesh scaffold to aggregate residual information while preserving explicit control over the number of residual points.
+    \item A power-tempered, rank-persistent element distribution that balances residual concentration against geometric coverage.
+    \item A matched-budget evaluation protocol for comparing adaptive, random, RAD, and low-discrepancy collocation policies under common FEM supervision and reference metrics.
+    \item A multi-seed empirical study across four PDE benchmarks, reporting solution error, fixed-reference residual, runtime, and paired statistical comparisons.
 \end{itemize}
 
-The remainder of this paper is organized as follows. Section~\ref{sec:method} details the mathematical formulation and the proposed sampling methods. Section~\ref{sec:experiments} describes the experimental setup and benchmarks. Section~\ref{sec:results} presents the empirical results and discussion. Section~\ref{sec:conclusions} concludes the paper and outlines future directions.
+The remainder of this paper is organized as follows.  \Cref{sec:method}
+defines the PINN objective, the mesh-scaffolded sampling procedure, and the
+comparison samplers.  \Cref{sec:experiments} describes the benchmark problems
+and experimental protocol.  \Cref{sec:results} presents the empirical results
+and tradeoff analysis, and \cref{sec:conclusions} summarizes the conclusions.
