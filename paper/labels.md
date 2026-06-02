@@ -13,6 +13,7 @@ Track stable paper labels here before they are referenced from LaTeX.
 | `eq:strong-residual` | Strong-form PINN residual used for mesh-backed scoring | Method | drafted |
 | `eq:element-indicator` | Local quadrature residual estimator on each mesh element | Method | drafted |
 | `eq:score-smoothing` | Neighbor-smoothed element score | Method | drafted |
+| `eq:normalized-rank` | Normalized rank transform of smoothed element scores | Method | drafted |
 | `eq:rank-persistent-score` | Rank-persistent adaptive score update | Method | drafted |
 | `eq:apt-distribution` | Power-tempered adaptive element distribution | Method | drafted |
 | `eq:residual-entropy` | Normalized residual entropy used for adaptive temperature control | Method | drafted |
@@ -30,6 +31,7 @@ Track stable paper labels here before they are referenced from LaTeX.
 | `fig:final-error-bars` | `artifacts/figures/final_error_bars.pdf` | Seed-aggregated final errors | planned |
 | `fig:adaptive-qualitative` | `artifacts/figures/adaptive_mesh_examples.pdf` | Adaptive refinement behavior on the geometry | planned |
 | `fig:element-residual-quadrature` | `paper/figures/bary.pdf` | Element-local quadrature residual score | drafted |
+| `fig:toy-residual-scaffold` | `paper/figures/toy_circular_residual_scaffold.pdf` | Illustrative residual scoring, smoothing, and allocation pipeline | drafted |
 
 ## Tables
 

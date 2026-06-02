@@ -42,6 +42,7 @@ Residual-aware collocation strategies improve PINN error convergence relative to
 - [ ] Save any presentation-quality GIFs or trajectory animations into `artifacts/animations/`.
 - [ ] Record one reproducible command per figure/table in `experiments/`.
 - [ ] Add final citation metadata to `paper/references.bib`.
+- [ ] Future sweep study (deferred until paper draft + experiment documentation are stable): quantify sensitivity to engineering clamps in adaptive samplers, including `refine_period`, `refinement_threshold`, `smoothing_lambda`, `warmup_iterations`, `persistence_alpha`, `beta_max`, `coverage_floor`, and `backbone_fraction`.
 
 ## Iteration Loop
 

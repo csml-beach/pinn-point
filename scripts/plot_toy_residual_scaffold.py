@@ -325,7 +325,7 @@ def _draw_panel(
 
 def _save_figure(out_dir: Path, basename: str, mesh: DiskMesh, raw: np.ndarray, smoothed: np.ndarray, probs: np.ndarray, beta: float, samples: np.ndarray) -> list[Path]:
     cmap = _cmap()
-    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.8), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 5.25), constrained_layout=True)
     fig.patch.set_facecolor("white")
 
     _draw_panel(
@@ -374,7 +374,14 @@ def _save_figure(out_dir: Path, basename: str, mesh: DiskMesh, raw: np.ndarray, 
             annotation_clip=False,
         )
 
-    cbar = fig.colorbar(prob_collection, ax=axes, location="right", fraction=0.024, pad=0.015)
+    cbar = fig.colorbar(
+        prob_collection,
+        ax=axes,
+        location="bottom",
+        fraction=0.055,
+        pad=0.035,
+        aspect=55,
+    )
     cbar.set_label("relative magnitude", fontsize=9.5)
     cbar.ax.tick_params(labelsize=8)
 

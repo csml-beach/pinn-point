@@ -52,39 +52,32 @@ the PDE constraint violation across the collocation set:
         \mathcal{R}_\theta(x)
     \right\|_2^2,
     \qquad
-    \mathcal{R}_\theta
+    \mathcal{R}_\theta (x)
     =
     \mathcal{N}[u_\theta](x)-f(x).
     \label{eq:residual-loss}
 \end{equation}
-The central methodological question is how to choose $\mathcal{X}_r$.
-
+The central methodological question is how to choose $\mathcal{X}_r$. An adaptive collocation-point sampler needs a scalar field that identifies where the current PINN iterate violates the governing equation based on the current collocation set.  We next describe the residual-scoring scaffold, before proposing the new adaptive interior collocation rule.
 \subsection{Mesh-Backed Residual Scoring}
 \label{subsec:mesh-backed-adaptive}
 
-The adaptive sampler requires a scalar field that identifies where the current
-PINN iterate violates the governing equation, but it must construct this field
-without changing the PINN approximation space or increasing the collocation
-budget.  This subsection defines that residual-scoring scaffold.  It is not yet
-a complete sampling rule; the proposed power-tempered allocation is specified in
-\cref{subsec:power-tempered}, while Halton-backed adaptive variants reuse the
-same scaffold with a different allocation rule.  We therefore use the
-finite-element mesh as a geometric scaffold for localizing residual information.
+  We use a finite-element mesh as a geometric scaffold for localizing residual information.  This mesh provides a structured way to evaluate the residual at specific points and assign scores to each element based on the residual magnitude.  The scores are then used to rank the elements and define an spatial importance measure, which is subsequently sampled to determine the next collocation points.  This allows the sampler to identify regions in the computational domain where the current PINN model deviates most from the governing equations, and add collocation points would be most beneficial for improving the approximation.
+
 For a PINN iterate $u_{\theta_k}$, the strong-form residual is
 \begin{equation}
     \mathcal{R}^{\mathrm{s}}_{\theta_k}(x)
-    =
+    :=
     \mathcal{N}[u_{\theta_k}](x)-f(x),
     \qquad x\in\Omega .
     \label{eq:strong-residual}
 \end{equation}
 To localize this residual, let
-$\mathcal{T}_h^{(k)}=\{E_i^{(k)}\}_{i=1}^{M_k}$ be a conforming simplicial mesh
-of $\Omega$ at sampling iteration $k$.  The mesh partitions the domain into
+$\mathcal{T}_h^{(k)}=\{E_i^{(k)}\}_{i=1}^{M_k}$ be an evolving finite-element mesh
+on $\Omega$ at iteration $k$.  The mesh partitions the domain into
 elements on which residual energy can be estimated and compared.
 
-The computable quantity used by the sampler is a local quadrature approximation
-to the strong residual energy.  Let
+We next compute a quadrature approximation
+to the residual energy.  Let
 $Q_i^{(k)}=\{q_{iq}\}_{q=1}^{n_q}$ be barycentric quadrature points on
 $E_i^{(k)}$ with nonnegative weights $\{\omega_q\}_{q=1}^{n_q}$ satisfying
 $\sum_q\omega_q=1$.  We assign element $E_i^{(k)}$ the score
@@ -100,14 +93,10 @@ $\sum_q\omega_q=1$.  We assign element $E_i^{(k)}$ the score
     \label{eq:element-indicator}
 \end{equation}
 where $|E_i^{(k)}|$ is the element area or volume and $\chi$ controls how much
-geometric measure enters the sampling score.  When $\chi=1$, this expression is
-a quadrature approximation to the element contribution
-$\int_{E_i^{(k)}}\|\mathcal{R}^{\mathrm{s}}_{\theta_k}(x)\|_2^2\,\dd x$; other
-values of $\chi$ shift the score toward either residual magnitude or geometric
-coverage.  Thus $s_i^{(k)}$ should be interpreted as a mesh-local residual
-energy indicator, not as a Galerkin projection of the residual.  Its purpose is
-to rank elements and define the spatial importance measure used for the next
-collocation set.
+geometric measure affects the sampling score.  When $\chi=1$, this expression is
+a quadrature approximation to the elemental integral
+$\int_{E_i^{(k)}}\|\mathcal{R}^{\mathrm{s}}_{\theta_k}(x)\|_2^2\,\dd x$. Lower
+values of $\chi$ shift the score toward residual magnitude.
 
 \begin{figure}[t]
     \centering
@@ -119,13 +108,18 @@ collocation set.
     \label{fig:element-residual-quadrature}
 \end{figure}
 
-The element scores in \cref{eq:element-indicator} define a discrete residual
-measure on the mesh.  Because this measure is obtained from the current network
-iterate, it may contain localized fluctuations caused by optimizer noise, finite
-quadrature, or transient errors early in training.  We therefore apply a local
-smoothing step on the element adjacency graph before converting the scores into
-sampling probabilities.  Specifically, each score is blended with the
-measure-weighted average of its neighboring element scores:
+\begin{remark}[Stabilization of the residual measure]
+The score $s_i^{(k)}$ is a mesh-local residual-energy indicator, not a
+Galerkin projection of the residual.  Its purpose is to define a discrete
+importance measure on the current mesh.  In computation, however, this measure
+is estimated from a partially trained neural network and can be affected by
+optimizer transients, finite quadrature, and localized residual spikes.  Before
+using the scores for point allocation, we therefore apply three stabilizing
+steps: local graph smoothing, rank normalization, and cross-iteration
+persistence.
+
+The local smoothing step blends each score with the average of
+its neighboring element scores,
 \begin{equation}
     \tilde{s}_i^{(k)}
     =
@@ -137,22 +131,26 @@ measure-weighted average of its neighboring element scores:
     \label{eq:score-smoothing}
 \end{equation}
 where $\mathcal{N}(i)$ is the set of neighboring elements and
-$\lambda_s\in[0,1]$ is the smoothing parameter.  Elements whose smoothed score
-exceeds a fixed fraction of the maximum score are marked for refinement.  The
-result is a spatially regularized residual measure that identifies coherent
-high-residual regions and is passed to the subsequent point allocation stage.
-
-\subsection{Power-Tempered Point Allocation}
-\label{subsec:power-tempered}
-
-Our primary adaptive method, denoted \texttt{adaptive\_power\_tempered}, uses
-the regularized scores from sampling iteration $k$ to propose the next interior
-collocation set.  The construction has two steps: the element scores are first
-converted into a probability distribution over mesh elements, and that
-distribution is then used to allocate a fixed budget of residual points.  To
-make the distribution insensitive to arbitrary score scales, the smoothed
-scores are converted into normalized ranks $z_i^{(k)}\in[0,1]$.  These ranks are
-then blended with their nearest previous element scores:
+$\lambda_s\in[0,1]$ is a smoothing parameter.  This step suppresses isolated
+elementwise fluctuations while preserving coherent high-residual regions.  The
+smoothed scores are then converted into normalized ranks
+\begin{equation}
+    z_i^{(k)}
+    =
+    \frac{
+        \operatorname{rank}\!\left(\tilde{s}_i^{(k)}\right)-1
+    }{
+        M_k-1
+    },
+    \qquad
+    z_i^{(k)}\in[0,1],
+    \label{eq:normalized-rank}
+\end{equation}
+where rank one corresponds to the smallest smoothed score and rank $M_k$ to the
+largest.  This ensures that the allocation depends on the ordering of
+elementwise residual indicators rather than their absolute scale.  Finally,
+cross-iteration smoothness is introduced by blending the current rank with the
+stabilized score from the previous iteration:
 \begin{equation}
     \hat{z}_i^{(k)}
     =
@@ -161,11 +159,27 @@ then blended with their nearest previous element scores:
     (1-\alpha) z_i^{(k)},
     \label{eq:rank-persistent-score}
 \end{equation}
-where $\alpha\in[0,1]$ is the persistence coefficient and $\pi(i)$ maps a current
-element to the nearest element centroid from the previous scaffold.  During the
-warmup period, the method uses the current ranks directly.
+where $\alpha\in[0,1]$ is a persistence coefficient and $\pi(i)$ maps element
+$E_i^{(k)}$ to the nearest element in the previous mesh iteration.  During
+the warmup stage, when no previous scaffold is available, we set
+$\hat{z}_i^{(k)}=z_i^{(k)}$.  The stabilized quantities
+$\hat{z}_i^{(k)}$ are the residual scores used by the collocation-point sampler
+below.
+\end{remark}
 
-The persistent ranks define an exponentially tilted element distribution:
+\subsection{Power-Tempered Collocation-Point Sampler}
+\label{subsec:power-tempered}
+
+We follow the general principle of residual-adaptive
+collocation \cite{wu2023comprehensive} where new points are allocated in regions where the current PINN residual is large. However, in contrast to
+pointwise residual-density methods, we define the point distribution over
+mesh elements and allocate a
+fixed-budget based on the stabilized element scores
+$\hat{z}_i^{(k)}$.
+
+We begin with a geometric coverage weight $|E_i^{(k)}|^\gamma$
+and tilt it by the stabilized residual rank through an exponential factor:
+
 \begin{equation}
     p_i^{(k)}
     =
@@ -179,8 +193,12 @@ The persistent ranks define an exponentially tilted element distribution:
     },
     \label{eq:apt-distribution}
 \end{equation}
-where $\gamma$ controls geometric coverage.  The temperature is tied to the
-concentration of the raw residual field.  Define
+The exponent $\gamma$ controls the contribution of element measure: larger
+values move the distribution toward area- or volume-proportional coverage,
+whereas smaller values give relatively more influence to residual rank.  The
+temperature $\beta_k$ controls how sharply the distribution favors the largest
+persistent ranks.  Rather than fixing this sharpness a priori, we relate it to
+the concentration of the residual field.  Let
 \begin{equation}
     H_k
     =
@@ -193,7 +211,7 @@ concentration of the raw residual field.  Define
     \frac{\tilde{s}_i^{(k)}}{\sum_j\tilde{s}_j^{(k)}}.
     \label{eq:residual-entropy}
 \end{equation}
-We then set
+be the normalized entropy of the smoothed residual scores.  We set
 \begin{equation}
     \beta_k
     =
@@ -202,12 +220,13 @@ We then set
     \left(\beta_{\max}-\beta_{\min}\right)(1-H_k).
     \label{eq:apt-temperature}
 \end{equation}
-When residuals are diffuse, the entropy is high and the sampler remains close to
-a geometric coverage distribution.  When residuals are concentrated, the
-temperature increases and more points are allocated to persistent high-residual
-regions.  Some variants mix \cref{eq:apt-distribution} with the true area/volume
-distribution as a coverage floor, but the final paper-facing experiments use
-the default power-tempered method unless otherwise stated.
+When the residual scores are diffuse, $H_k$ is close to one, $\beta_k$ is near
+$\beta_{\min}$, and the allocation remains close to the geometric coverage
+weight.  When the residual scores are concentrated, $H_k$ decreases and the
+temperature moves toward $\beta_{\max}$, increasing the allocation to
+persistent high-residual regions.  This entropy control prevents the method
+from applying an overly sharp residual bias when the residual field does not
+yet contain a coherent localization signal.
 
 Given probabilities $p_i^{(k)}$ and residual-point budget $N_r$, integer
 element quotas are assigned deterministically by largest remainder:
@@ -222,7 +241,9 @@ element quotas are assigned deterministically by largest remainder:
     \label{eq:largest-remainder}
 \end{equation}
 where the $\delta_i$ allocate the remaining points to the elements with the
-largest fractional remainders.  The next residual collocation set is then
+largest fractional remainders.  This deterministic rounding preserves the fixed
+collocation budget while avoiding additional multinomial noise in the number of
+points assigned to each element.  The next residual collocation set is then
 \begin{equation}
     \mathcal{X}_r^{(k+1)}
     =
@@ -235,9 +256,21 @@ largest fractional remainders.  The next residual collocation set is then
     \label{eq:collocation-update}
 \end{equation}
 In practice, the uniform samples inside each selected triangle or tetrahedron
-are generated with barycentric coordinates.  Thus the network state
-$u_{\theta_k}$ determines a residual measure on the current mesh, and that
-measure determines the residual points used in the next training stage.
+are generated with barycentric coordinates.  Thus the current network state
+$u_{\theta_k}$ determines a mesh-local residual measure, this measure induces
+element probabilities, and those probabilities define the collocation points
+used in the next training stage.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\textwidth]{figures/toy_circular_residual_scaffold.pdf}
+    \caption{Illustrative residual-scaffold pipeline on a Netgen disk mesh.  A
+    synthetic scalar residual energy density is used only for visualization.
+    The element scores are computed by local quadrature, smoothed over the mesh
+    adjacency graph, and converted into power-tempered element probabilities
+    from which the next residual collocation set is sampled.}
+    \label{fig:toy-residual-scaffold}
+\end{figure}
 
 \subsection{Comparison Samplers}
 \label{subsec:comparison-samplers}

@@ -14,6 +14,7 @@ Available problems:
       transient Navier-Stokes benchmark
     - ElasticityNotchedCantilever3DProblem: 3D notched cantilever elasticity
     - ElasticityLocalizedCantilever3DProblem: harder localized-load 3D elasticity
+    - MaxwellCoilCore3DProblem: 3D magnetostatic coil-core benchmark
     
 To add a new problem:
     1. Create a new file in this directory (e.g., heat.py)
@@ -45,6 +46,7 @@ from .navier_stokes_channel_obstacle import NavierStokesChannelObstacleProblem
 from .poisson import PoissonProblem
 from .poisson_ring import PoissonRingProblem
 from .poisson_ring_hard import PoissonRingHardProblem
+from .maxwell_coil_core_3d import MaxwellCoilCore3DProblem
 
 # Registry of available problems for CLI/config selection
 PROBLEM_REGISTRY = {
@@ -56,6 +58,7 @@ PROBLEM_REGISTRY = {
     "navier_stokes_channel_obstacle": NavierStokesChannelObstacleProblem,
     "elasticity_notched_cantilever_3d": ElasticityNotchedCantilever3DProblem,
     "elasticity_localized_cantilever_3d": ElasticityLocalizedCantilever3DProblem,
+    "maxwell_coil_core_3d": MaxwellCoilCore3DProblem,
 }
 
 
